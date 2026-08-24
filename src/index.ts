@@ -1,17 +1,12 @@
 /**
  * V2Ray Aggregator — Cloudflare Worker Entry Point
- *
- * This is the main entry point for the V2Ray Aggregator Worker.
- * It handles incoming HTTP requests and routes them to the appropriate handler.
  */
 
 import { handleWebhookRequest } from "./telegram/webhook";
 
 export interface Env {
-  // D1 Database binding
   DB: D1Database;
 
-  // Secrets (configured via wrangler secret put)
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_WEBHOOK_SECRET: string;
   GITHUB_TOKEN: string;
@@ -19,56 +14,120 @@ export interface Env {
 }
 
 export default {
+
   async fetch(
     request: Request,
     env: Env,
-    _ctx: ExecutionContext
+    ctx: ExecutionContext
   ): Promise<Response> {
+
     const url = new URL(request.url);
 
-    // Health check endpoint
-    if (url.pathname === "/" && request.method === "GET") {
+
+    // Health check
+    if (
+      url.pathname === "/" &&
+      request.method === "GET"
+    ) {
+
       return new Response(
         JSON.stringify({
           status: "ok",
           service: "v2ray-aggregator",
           version: "0.1.0",
-          timestamp: new Date().toISOString(),
+          time: new Date().toISOString()
         }),
         {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
+          headers:{
+            "content-type":"application/json"
+          }
         }
       );
     }
 
-    // Telegram webhook endpoint
-    if (url.pathname === "/webhook" && request.method === "POST") {
-      return handleWebhookRequest(request, env);
+
+
+    // Telegram webhook
+
+    if (
+      url.pathname === "/webhook" &&
+      request.method === "POST"
+    ) {
+
+      try {
+
+        return await handleWebhookRequest(
+          request,
+          env
+        );
+
+      } catch(error){
+
+        console.error(
+          "Webhook error:",
+          error
+        );
+
+
+        return new Response(
+          JSON.stringify({
+            ok:false,
+            error:"internal error"
+          }),
+          {
+            status:500,
+            headers:{
+              "content-type":"application/json"
+            }
+          }
+        );
+
+      }
+
     }
 
-    // 404 for all other routes
-    return new Response("Not Found", { status: 404 });
+
+
+    return new Response(
+      "Not Found",
+      {
+        status:404
+      }
+    );
+
   },
+
+
 
   async scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: Env,
-    _ctx: ExecutionContext
-  ): Promise<void> {
-    // Periodic cleanup: remove processed_updates older than 90 days
-    // Prevents unbounded table growth
+    ctx: ExecutionContext
+  ){
+
     try {
-      const { cleanupOldUpdates } = await import("./db/updates");
-      const deleted = await cleanupOldUpdates(env.DB, 90);
-      if (deleted > 0) {
-        console.log(`Cleaned up ${deleted} old processed update records`);
-      }
-    } catch (err) {
-      console.error(
-        "Scheduled cleanup failed:",
-        err instanceof Error ? err.message : "Unknown error"
+
+      const {
+        cleanupOldUpdates
+      } = await import("./db/updates");
+
+
+      await cleanupOldUpdates(
+        env.DB,
+        90
       );
+
+
+    } catch(e){
+
+      console.error(
+        "cleanup failed",
+        e
+      );
+
     }
-  },
+
+  }
+
+
 };

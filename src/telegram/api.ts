@@ -111,8 +111,16 @@ export class RealTelegramBotAPI implements TelegramBotAPI {
         }
       );
 
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "unknown");
+        console.error("[api] sendMessage FAILED: status=" + response.status + " chatId=" + params.chat_id + " error=" + errorText.substring(0, 200));
+      } else {
+        console.log("[api] sendMessage OK: chatId=" + params.chat_id);
+      }
+
       return response.ok;
-    } catch {
+    } catch (err) {
+      console.error("[api] sendMessage EXCEPTION: chatId=" + params.chat_id + " error=" + err);
       return false;
     }
   }

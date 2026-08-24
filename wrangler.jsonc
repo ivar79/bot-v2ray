@@ -3,27 +3,23 @@
   "name": "v2ray-aggregator",
   "main": "src/index.ts",
   "compatibility_date": "2025-08-20",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
 
-  // D1 Database binding
-  // After running: npx wrangler d1 create v2ray-aggregator
-  // Uncomment and paste the database_id:
-  // "d1_databases": [
-  //   {
-  //     "binding": "DB",
-  //     "database_name": "v2ray-aggregator",
-  //     "database_id": "YOUR_DATABASE_ID_HERE"
-  //   }
-  // ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bot-v2ray-db",
+      "database_id": "855fd262-fcb7-4f49-98e6-8f4859972a10"
+    }
+  ],
 
-  // Secrets (set via wrangler secret put):
-  // TELEGRAM_BOT_TOKEN
-  // TELEGRAM_WEBHOOK_SECRET
-  // GITHUB_TOKEN
-  // ADMIN_USER_IDS
+  "vars": {},
 
-  // Optional: Cron triggers for periodic tasks
-  // "triggers": {
-  //   "crons": ["0 0 * * *"]
-  // }
+  "triggers": {
+    "crons": [
+      "0 0 * * *"
+    ]
+  }
 }

@@ -54,15 +54,19 @@ export async function handleStart(ctx: CommandContext): Promise<void> {
   const chatId = message.chat.id;
   const userId = message.from?.id;
 
+  console.log("[commands] /start: userId=" + userId + " chatId=" + chatId + " isAdmin=" + isAdmin(userId ?? 0, adminUserIds) + " adminIdsConfigured=" + !!adminUserIds);
+
   if (!userId || !isAdmin(userId, adminUserIds)) {
-    await api.sendMessage({
+    console.log("[commands] /start: ACCESS DENIED for userId=" + userId);
+    const r1 = await api.sendMessage({
       chat_id: chatId,
       text: "⛔ Access denied.\nThis bot is for authorized administrators only.",
     });
+    console.log("[commands] /start: access denied sendMessage=" + r1);
     return;
   }
 
-  await api.sendMessage({
+  const r2 = await api.sendMessage({
     chat_id: chatId,
     text: [
       "🤖 <b>V2Ray Aggregator Bot</b>",
@@ -75,6 +79,7 @@ export async function handleStart(ctx: CommandContext): Promise<void> {
     ].join("\n"),
     parse_mode: "HTML",
   });
+  console.log("[commands] /start: welcome sendMessage=" + r2);
 }
 
 // ─── /help ─────────────────────────────────────────────────

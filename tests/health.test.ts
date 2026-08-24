@@ -23,7 +23,7 @@ describe("Worker Health Check", () => {
     expect(body.status).toBe("ok");
     expect(body.service).toBe("v2ray-aggregator");
     expect(body.version).toBe("0.1.0");
-    expect(body.timestamp).toBeDefined();
+    expect(body.time).toBeDefined();
   });
 
   it("POST / returns 404", async () => {

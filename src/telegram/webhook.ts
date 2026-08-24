@@ -54,8 +54,10 @@ export async function handleWebhookRequest(
   // ── Step 1: Verify webhook secret ──
   const secretToken = request.headers.get("X-Telegram-Bot-Secret-Token");
   if (!secretToken || secretToken !== env.TELEGRAM_WEBHOOK_SECRET) {
+    console.error("[webhook] secret validation failed: header=" + (secretToken ? "present" : "missing"));
     return new Response(SECRET_ERROR, { status: 403 });
   }
+  console.log("[webhook] secret validated OK");
 
   // ── Step 2: Read and parse body ──
   let bodyText: string;
@@ -79,17 +81,25 @@ export async function handleWebhookRequest(
   try {
     update = JSON.parse(bodyText) as TgUpdate;
   } catch {
+    console.error("[webhook] JSON parse failed, body length=" + bodyText.length);
     return new Response("Invalid JSON", { status: 400 });
   }
 
   // Validate basic structure
   if (typeof update.update_id !== "number") {
+    console.error("[webhook] invalid update structure: missing update_id");
     return new Response("Invalid update structure", { status: 400 });
   }
+
+  console.log("[webhook] update parsed: id=" + update.update_id
+    + " hasMessage=" + !!update.message
+    + " hasChannelPost=" + !!update.channel_post
+    + " hasCallbackQuery=" + !!update.callback_query);
 
   // ── Step 3: Check idempotency ──
   const alreadyProcessed = await isUpdateProcessed(env.DB, update.update_id);
   if (alreadyProcessed) {
+    console.log("[webhook] update " + update.update_id + " already processed, skipping");
     // Return 200 so Telegram doesn't retry
     return new Response("OK", { status: 200 });
   }
@@ -107,6 +117,7 @@ export async function handleWebhookRequest(
   // Mark even if routing failed to prevent infinite retries
   // of the same malformed update
   await markUpdateProcessed(env.DB, update.update_id);
+  console.log("[webhook] update " + update.update_id + " marked as processed");
 
   return new Response("OK", { status: 200 });
 }

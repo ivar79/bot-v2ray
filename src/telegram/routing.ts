@@ -36,6 +36,9 @@ export async function processMessage(
   githubApi?: GitHubAPI
 ): Promise<void> {
   const text = getMessageText(message);
+  const userId = message.from?.id;
+  const chatId = message.chat.id;
+  console.log("[routing] message received: userId=" + userId + " chatId=" + chatId + " text=" + (text || "(empty)").substring(0, 80));
 
   // Check for commands
   if (text.startsWith("/")) {
@@ -166,6 +169,9 @@ async function handleCommand(
 
   if (!command) return;
 
+  const userId = message.from?.id;
+  console.log("[routing] command detected: /" + command + " from userId=" + userId);
+
   // Execute the command
   const ctx = {
     db,
@@ -179,6 +185,7 @@ async function handleCommand(
   const executed = await executeCommand(command, ctx);
 
   if (!executed) {
+    console.log("[routing] unknown command: /" + command);
     // Unknown command — send help hint (only for private chats)
     if (isPrivateChat(message.chat)) {
       await api.sendMessage({
