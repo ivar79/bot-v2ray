@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+*.log
+.DS_Store
+*.tsbuildinfo
+*.sqlite
+*.db
+coverage/
+.nyc_output/
+*.tgz
+.vscode/
+.idea/
+.freebuff/
+MASTER BUILD DIRECTIVE*
