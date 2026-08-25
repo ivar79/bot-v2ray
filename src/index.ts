@@ -111,11 +111,19 @@ export default {
         cleanupOldUpdates
       } = await import("./db/updates");
 
+      const {
+        fetchAllSubscriptions
+      } = await import("./ingest/subscription");
+
 
       await cleanupOldUpdates(
         env.DB,
         90
       );
+
+      console.log("[scheduled] Starting subscription fetch cycle");
+      const fetchResult = await fetchAllSubscriptions(env.DB);
+      console.log("[scheduled] Fetch complete:", JSON.stringify(fetchResult));
 
 
     } catch(e){
