@@ -60,7 +60,7 @@ describe("Worker Health Check", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Telegram-Bot-Secret-Token": "wrong-secret",
+        "x-telegram-bot-api-secret-token": "wrong-secret",
       },
       body: JSON.stringify({ update_id: 1 }),
     });

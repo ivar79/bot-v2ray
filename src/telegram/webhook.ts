@@ -2,7 +2,7 @@
  * Telegram Webhook Handler
  *
  * Handles incoming Telegram webhook requests:
- * 1. Verifies X-Telegram-Bot-Secret-Token header
+ * 1. Verifies x-telegram-bot-api-secret-token header
  * 2. Parses the Telegram Update
  * 3. Routes to the appropriate handler
  * 4. Handles idempotency via processed_updates
@@ -52,7 +52,7 @@ export async function handleWebhookRequest(
   apiOverride?: TelegramBotAPI
 ): Promise<Response> {
   // ── Step 1: Verify webhook secret ──
-  const secretToken = request.headers.get("X-Telegram-Bot-Secret-Token");
+  const secretToken = request.headers.get("x-telegram-bot-api-secret-token");
   if (!secretToken || secretToken !== env.TELEGRAM_WEBHOOK_SECRET) {
     console.error("[webhook] secret validation failed: header=" + (secretToken ? "present" : "missing"));
     return new Response(SECRET_ERROR, { status: 403 });

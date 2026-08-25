@@ -21,7 +21,7 @@ function m(text: string, uid = 111111): TgMessage {
 }
 function u(id: number): TgUpdate { return { update_id: id, message: m("/start") }; }
 function r(body: TgUpdate, s = "test-secret"): Request {
-  return new Request("https://example.com/webhook", { method: "POST", headers: { "Content-Type": "application/json", "X-Telegram-Bot-Secret-Token": s }, body: JSON.stringify(body) });
+  return new Request("https://example.com/webhook", { method: "POST", headers: { "Content-Type": "application/json", "x-telegram-bot-api-secret-token": s }, body: JSON.stringify(body) });
 }
 const E = (db: D1Database) => ({ DB: db, TELEGRAM_BOT_TOKEN: "token", TELEGRAM_WEBHOOK_SECRET: "test-secret", ADMIN_USER_IDS: A });describe("Security Audit",()=>{let db:D1Database;let api:MockTelegramBotAPI;beforeEach(()=>{db=createTestDB();api=new MockTelegramBotAPI()});
 describe("1.Auth",()=>{
@@ -39,14 +39,14 @@ it("neg no admin",()=>{expect(parseAdminUserIds("-1,111111").has(-1)).toBe(false
 it("zero no admin",()=>{expect(parseAdminUserIds("0,111111").has(0)).toBe(false)});
 });
 describe("3.Webhook",()=>{
-it("bad JSON",async()=>{expect((await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","X-Telegram-Bot-Secret-Token":"test-secret"},body:"bad"}),E(db))).status).toBe(400)});
-it("no update_id",async()=>{expect((await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","X-Telegram-Bot-Secret-Token":"test-secret"},body:JSON.stringify({message:{}})}),E(db))).status).toBe(400)});
-it("oversized",async()=>{expect((await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","X-Telegram-Bot-Secret-Token":"test-secret","content-length":"999999999"},body:"{}"}),E(db))).status).toBe(413)});
+it("bad JSON",async()=>{expect((await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","x-telegram-bot-api-secret-token":"test-secret"},body:"bad"}),E(db))).status).toBe(400)});
+it("no update_id",async()=>{expect((await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","x-telegram-bot-api-secret-token":"test-secret"},body:JSON.stringify({message:{}})}),E(db))).status).toBe(400)});
+it("oversized",async()=>{expect((await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","x-telegram-bot-api-secret-token":"test-secret","content-length":"999999999"},body:"{}"}),E(db))).status).toBe(413)});
 it("no stack traces",async()=>{const t=await(await handleWebhookRequest(r(u(9011),"wrong"),E(db))).text();expect(t).not.toContain("stack");expect(t).not.toContain("Error")});
 });
 describe("4.Secrets",()=>{
 it("publish no token leak",async()=>{await processMessage(m("/publish"),db,api,A,undefined);const all=api.sendMessageCalls.map(c=>c.text).join(String.fromCharCode(10));expect(all).not.toContain("token");expect(all).not.toContain("ghp_");expect(api.sendMessageCalls.length).toBeGreaterThanOrEqual(2)});
-it("webhook no secret",async()=>{const t=await(await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","X-Telegram-Bot-Secret-Token":"test-secret"},body:"x"}),{DB:db,TELEGRAM_BOT_TOKEN:"super-secret-12345",TELEGRAM_WEBHOOK_SECRET:"test-secret",ADMIN_USER_IDS:A})).text();expect(t).not.toContain("super-secret")});
+it("webhook no secret",async()=>{const t=await(await handleWebhookRequest(new Request("https://x.com",{method:"POST",headers:{"Content-Type":"application/json","x-telegram-bot-api-secret-token":"test-secret"},body:"x"}),{DB:db,TELEGRAM_BOT_TOKEN:"super-secret-12345",TELEGRAM_WEBHOOK_SECRET:"test-secret",ADMIN_USER_IDS:A})).text();expect(t).not.toContain("super-secret")});
 it("gh token not in tg",async()=>{await processMessage(m("/publish"),db,api,A,"ghp_secret123");const all=api.sendMessageCalls.map(c=>c.text).join(String.fromCharCode(10));expect(all).not.toContain("ghp_secret123")});
 });
 describe("5.D1Injection",()=>{

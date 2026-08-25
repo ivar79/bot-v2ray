@@ -52,7 +52,7 @@ function makeRequest(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Telegram-Bot-Secret-Token": secretToken,
+      "x-telegram-bot-api-secret-token": secretToken,
     },
     body: JSON.stringify(body),
   });
@@ -114,7 +114,7 @@ describe("Webhook Handler", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Secret-Token": "test-webhook-secret",
+          "x-telegram-bot-api-secret-token": "test-webhook-secret",
         },
         body: "not json!!!",
       });
@@ -130,7 +130,7 @@ describe("Webhook Handler", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Secret-Token": "test-webhook-secret",
+          "x-telegram-bot-api-secret-token": "test-webhook-secret",
         },
         body: JSON.stringify({ message: {} }),
       });
@@ -146,7 +146,7 @@ describe("Webhook Handler", () => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Telegram-Bot-Secret-Token": "test-webhook-secret",
+          "x-telegram-bot-api-secret-token": "test-webhook-secret",
         },
         body: "",
       });
