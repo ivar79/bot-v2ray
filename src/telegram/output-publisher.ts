@@ -147,3 +147,98 @@ export async function publishToTelegramChannel(
     totalCount: files.length,
   };
 }
+
+// ─── Config Card Publishing ────────────────────────────────
+
+/** Result of publishing config cards to a channel. */
+export interface ConfigCardPublishResult {
+  /** Whether at least one card was sent successfully. */
+  success: boolean;
+  /** Number of cards sent successfully. */
+  sentCount: number;
+  /** Number of cards that failed to send. */
+  failedCount: number;
+  /** Total number of cards attempted. */
+  totalCount: number;
+  /** Error message if the entire operation failed. */
+  error?: string;
+}
+
+/** Delay between card sends to avoid rate limits (200ms). */
+const INTER_CARD_DELAY_MS = 200;
+
+/**
+ * Publish individual config cards to a Telegram channel.
+ * Each config is sent as a formatted text message (sendMessage),
+ * not as a document.
+ *
+ * @param db — D1 database to read output channel setting
+ * @param api — Telegram Bot API client
+ * @param cards — Array of pre-formatted card strings from formatConfigCard()
+ * @returns ConfigCardPublishResult with detailed reporting
+ */
+export async function sendConfigCards(
+  db: D1Database,
+  api: TelegramBotAPI,
+  cards: string[]
+): Promise<ConfigCardPublishResult> {
+  const channelIdStr = await getSetting(db, "output_channel_id");
+
+  if (!channelIdStr) {
+    return {
+      success: false,
+      sentCount: 0,
+      failedCount: 0,
+      totalCount: cards.length,
+      error: "Output channel not configured. Use /setoutput to configure.",
+    };
+  }
+
+  const channelId = parseInt(channelIdStr, 10);
+  if (isNaN(channelId)) {
+    return {
+      success: false,
+      sentCount: 0,
+      failedCount: 0,
+      totalCount: cards.length,
+      error: "Invalid output channel ID in settings.",
+    };
+  }
+
+  let sentCount = 0;
+  let failedCount = 0;
+
+  for (let i = 0; i < cards.length; i++) {
+    const card = cards[i];
+    if (!card || card.length === 0) {
+      failedCount++;
+      continue;
+    }
+
+    try {
+      const sent = await api.sendMessage({
+        chat_id: channelId,
+        text: card,
+      });
+
+      if (sent) {
+        sentCount++;
+      } else {
+        failedCount++;
+      }
+    } catch {
+      failedCount++;
+    }
+
+    if (i < cards.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, INTER_CARD_DELAY_MS));
+    }
+  }
+
+  return {
+    success: sentCount > 0,
+    sentCount,
+    failedCount,
+    totalCount: cards.length,
+  };
+}

@@ -321,4 +321,77 @@ describe("Telegram Output Publisher — /publish integration", () => {
     expect(api.sendMessageCalls.length).toBe(1);
     expect(api.sendMessageCalls[0].text).toContain("Access denied");
   });
+
+// ─── sendConfigCards Tests ──────────────────────────────────
+
+describe("sendConfigCards()", () => {
+  let db: ReturnType<typeof createTestDB>;
+  let api: MockTelegramBotAPI;
+
+  beforeEach(() => {
+    db = createTestDB();
+    api = new MockTelegramBotAPI();
+  });
+
+  it("should send config cards to configured channel", async () => {
+    await setSetting(db, "output_channel_id", "-100123");
+    const cards = ["Card 1", "Card 2"];
+
+    const { sendConfigCards } = await import("../../src/telegram/output-publisher");
+    const result = await sendConfigCards(db, api, cards);
+
+    expect(result.success).toBe(true);
+    expect(result.sentCount).toBe(2);
+    expect(result.failedCount).toBe(0);
+    expect(result.totalCount).toBe(2);
+    expect(api.sendMessageCalls.length).toBe(2);
+    expect(api.sendMessageCalls[0].chat_id).toBe(-100123);
+    expect(api.sendMessageCalls[0].text).toBe("Card 1");
+    expect(api.sendMessageCalls[1].text).toBe("Card 2");
+  });
+
+  it("should fail when output channel not configured", async () => {
+    const { sendConfigCards } = await import("../../src/telegram/output-publisher");
+    const result = await sendConfigCards(db, api, ["Card 1"]);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("not configured");
+  });
+
+  it("should skip empty cards", async () => {
+    await setSetting(db, "output_channel_id", "-100123");
+    const cards = ["Card 1", "", "Card 3"];
+
+    const { sendConfigCards } = await import("../../src/telegram/output-publisher");
+    const result = await sendConfigCards(db, api, cards);
+
+    expect(result.sentCount).toBe(2);
+    expect(result.failedCount).toBe(1);
+  });
+
+  it("should handle API failures gracefully", async () => {
+    await setSetting(db, "output_channel_id", "-100123");
+    api.sendDocumentResult = false;
+    api.sendMessageResult = false;
+    const cards = ["Card 1"];
+
+    const { sendConfigCards } = await import("../../src/telegram/output-publisher");
+    const result = await sendConfigCards(db, api, cards);
+
+    expect(result.success).toBe(false);
+    expect(result.sentCount).toBe(0);
+    expect(result.failedCount).toBe(1);
+  });
+
+  it("should return empty result for empty cards array", async () => {
+    await setSetting(db, "output_channel_id", "-100123");
+
+    const { sendConfigCards } = await import("../../src/telegram/output-publisher");
+    const result = await sendConfigCards(db, api, []);
+
+    expect(result.success).toBe(false);
+    expect(result.totalCount).toBe(0);
+  });
+});
+
 });
