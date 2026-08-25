@@ -19,6 +19,7 @@
  */
 
 import type { ProtocolParser, ParsedConfig } from "./base";
+import { detectLocation } from "../utils/location";
 import { invalidResult, isValidPort, normalizeServer } from "./base";
 import { decodeBase64 } from "../utils/base64";
 import { sha256hex } from "../utils/crypto";
@@ -64,19 +65,20 @@ export class ShadowsocksParser implements ProtocolParser {
 
     // Split off fragment (remark)
     const fragmentIdx = body.indexOf("#");
+    const fragment = fragmentIdx >= 0 ? body.slice(fragmentIdx + 1) : "";
     const withoutFragment = fragmentIdx >= 0 ? body.slice(0, fragmentIdx) : body;
 
     // Try SIP002 format first: base64part@host:port?params
     const sip002Result = tryParseSIP002(withoutFragment, raw);
-    if (sip002Result) return sip002Result;
+    if (sip002Result) return enrichWithLocation(sip002Result, fragment);
 
     // Try SIP002 alternate: base64part (decodes to method:password@host:port)
     const sip002AltResult = tryParseSIP002Alt(body, withoutFragment, raw);
-    if (sip002AltResult) return sip002AltResult;
+    if (sip002AltResult) return enrichWithLocation(sip002AltResult, fragment);
 
     // Try legacy format
     const legacyResult = tryParseLegacy(withoutFragment, raw);
-    if (legacyResult) return legacyResult;
+    if (legacyResult) return enrichWithLocation(legacyResult, fragment);
 
     return invalidResult("ss", raw, "Unrecognized Shadowsocks format");
   }
@@ -242,6 +244,15 @@ function parseHostPort(hostPort: string): {
   const portStr = hostPort.slice(lastColon + 1);
   const port = parseInt(portStr, 10);
   return { host, port, portStr };
+}
+
+
+// --- Location-enriched wrapper ---
+
+function enrichWithLocation(result: ParsedConfig, fragment: string): ParsedConfig {
+  if (!result.isValid) return result;
+  const location = detectLocation(fragment, result.server);
+  return { ...result, fragment: fragment || undefined, location };
 }
 
 function buildCanonical(

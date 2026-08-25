@@ -25,6 +25,7 @@
  */
 
 import type { ProtocolParser, ParsedConfig } from "./base";
+import { detectLocation } from "../utils/location";
 import { invalidResult, isValidPort, normalizeServer } from "./base";
 import { sha256hex } from "../utils/crypto";
 
@@ -64,6 +65,7 @@ export class Hysteria2Parser implements ProtocolParser {
 
     // Split off fragment (remark)
     const fragmentIdx = body.indexOf("#");
+    const fragment = fragmentIdx >= 0 ? body.slice(fragmentIdx + 1) : "";
     const withoutFragment = fragmentIdx >= 0 ? body.slice(0, fragmentIdx) : body;
 
     // Split query string
@@ -124,6 +126,9 @@ export class Hysteria2Parser implements ProtocolParser {
     // Build canonical string
     const canonical = buildCanonical(auth, host, port, params);
 
+    // Detect location from fragment and hostname
+    const location = detectLocation(fragment, host);
+
     return {
       protocol: "hysteria2",
       raw,
@@ -132,6 +137,8 @@ export class Hysteria2Parser implements ProtocolParser {
       isValid: true,
       server: normalizeServer(host),
       port,
+      fragment: fragment || undefined,
+      location,
     };
   }
 }

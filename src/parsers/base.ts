@@ -5,6 +5,8 @@
  * Also contains version constants for tracking canonicalization changes.
  */
 
+import type { LocationResult } from "../utils/location";
+
 // ─── Version Constants ─────────────────────────────────────
 
 /** Parser version — bumped when parsing logic changes. */
@@ -46,6 +48,12 @@ export interface ParsedConfig {
 
   /** Optional normalized URI for database storage. */
   normalizedUri?: string;
+
+  /** Detected geographic location from fragment/hostname/source. */
+  location?: LocationResult;
+
+  /** Raw fragment/remark extracted from URI (#...). */
+  fragment?: string;
 }
 
 // ─── Parser Interface ──────────────────────────────────────

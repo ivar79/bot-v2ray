@@ -16,6 +16,7 @@
  */
 
 import type { ProtocolParser, ParsedConfig } from "./base";
+import { detectLocation } from "../utils/location";
 import { invalidResult, isValidPort, normalizeServer } from "./base";
 
 /** Query parameters that are display-only / non-identity. */
@@ -114,6 +115,9 @@ export class VLESSParser implements ProtocolParser {
     // Build canonical string
     const canonical = buildCanonical(uuid, host, port, params);
 
+    // Detect location from fragment and hostname
+    const location = detectLocation(fragment, host);
+
     return {
       protocol: "vless",
       raw,
@@ -122,6 +126,8 @@ export class VLESSParser implements ProtocolParser {
       isValid: true,
       server: normalizeServer(host),
       port,
+      fragment: fragment || undefined,
+      location,
     };
   }
 }

@@ -17,6 +17,7 @@
  */
 
 import type { ProtocolParser, ParsedConfig } from "./base";
+import { detectLocation } from "../utils/location";
 import { PARSER_VERSION, CANONICAL_VERSION, invalidResult, isValidPort } from "./base";
 import { decodeBase64 } from "../utils/base64";
 import { sha256hex } from "../utils/crypto";
@@ -119,6 +120,9 @@ export class VMessParser implements ProtocolParser {
     // For the actual hash, we'll use a synchronous-ish wrapper.
     const canonicalStr = JSON.stringify(canonical);
 
+    const fragment = typeof obj.ps === "string" ? obj.ps : "";
+    const location = detectLocation(fragment, String(obj.add));
+
     return {
       protocol: "vmess",
       raw,
@@ -127,6 +131,8 @@ export class VMessParser implements ProtocolParser {
       isValid: true,
       server: String(obj.add).toLowerCase(),
       port,
+      fragment: fragment || undefined,
+      location,
     };
   }
 }
