@@ -23,10 +23,17 @@ export function createTestDB(): D1Database {
   // Enable foreign keys
   db.pragma("foreign_keys = ON");
 
-  // Load and apply the migration
-  const migrationPath = resolve(__dirname, "../../migrations/0001_initial.sql");
-  const migrationSQL = readFileSync(migrationPath, "utf-8");
-  db.exec(migrationSQL);
+  // Load and apply migrations
+  const migrations = [
+    "0001_initial.sql",
+    "0002_add_location.sql",
+    "0003_add_subscriptions.sql",
+  ];
+  for (const file of migrations) {
+    const path = resolve(__dirname, "../../migrations/" + file);
+    const sql = readFileSync(path, "utf-8");
+    db.exec(sql);
+  }
 
   // Wrap the better-sqlite3 database to match D1Database interface
   return wrapAsD1(db);

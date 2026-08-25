@@ -174,6 +174,10 @@ export async function runPipeline(
           canonical: parsed.canonical,
           config_hash: parsed.configHash,
           normalized_uri: parsed.normalizedUri,
+          location_country: parsed.location?.country,
+          location_country_code: parsed.location?.countryCode,
+          location_flag: parsed.location?.flag,
+          location_display: parsed.location?.display,
         });
 
         await insertOccurrence(db, {

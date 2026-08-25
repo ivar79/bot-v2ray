@@ -20,6 +20,10 @@ export interface ConfigRow {
   parser_version: string;
   first_seen: string;
   last_seen: string;
+  location_country: string | null;
+  location_country_code: string | null;
+  location_flag: string | null;
+  location_display: string | null;
 }
 
 export interface OccurrenceRow {
@@ -42,6 +46,17 @@ export interface SourceRow {
   username: string | null;
   enabled: number;
   trusted: number;
+  sub_url: string | null;
+  sub_type: string | null;
+  sub_status: string;
+  auto_fetch: number;
+  fetch_interval_hours: number;
+  last_fetched_at: string | null;
+  last_fetch_status: string | null;
+  last_fetch_error: string | null;
+  last_config_count: number;
+  consecutive_failures: number;
+  total_fetches: number;
   created_at: string;
   updated_at: string;
 }
@@ -109,6 +124,10 @@ export interface ConfigInsert {
   is_valid?: number;
   active?: number;
   parser_version?: string;
+  location_country?: string;
+  location_country_code?: string;
+  location_flag?: string;
+  location_display?: string;
 }
 
 export interface OccurrenceInsert {
@@ -127,6 +146,11 @@ export interface SourceInsert {
   username?: string;
   enabled?: number;
   trusted?: number;
+  sub_url?: string;
+  sub_type?: string;
+  sub_status?: string;
+  auto_fetch?: number;
+  fetch_interval_hours?: number;
 }
 
 export interface BatchInsert {

@@ -109,6 +109,10 @@ export async function updateSource(
     username?: string;
     enabled?: number;
     trusted?: number;
+    sub_url?: string;
+    sub_type?: string;
+    sub_status?: string;
+    auto_fetch?: number;
   }
 ): Promise<SourceRow | null> {
   const sets: string[] = [];
@@ -129,6 +133,22 @@ export async function updateSource(
   if (updates.trusted !== undefined) {
     sets.push("trusted = ?");
     values.push(updates.trusted);
+  }
+  if (updates.sub_url !== undefined) {
+    sets.push("sub_url = ?");
+    values.push(updates.sub_url);
+  }
+  if (updates.sub_type !== undefined) {
+    sets.push("sub_type = ?");
+    values.push(updates.sub_type);
+  }
+  if (updates.sub_status !== undefined) {
+    sets.push("sub_status = ?");
+    values.push(updates.sub_status);
+  }
+  if (updates.auto_fetch !== undefined) {
+    sets.push("auto_fetch = ?");
+    values.push(updates.auto_fetch);
   }
 
   if (sets.length === 0) {
@@ -175,4 +195,76 @@ export async function isSourceEnabled(
     .bind(chatId)
     .first<{ "1": number }>();
   return row !== null;
+}
+
+// ─── Subscription Queries ──────────────────────────────────
+
+/**
+ * Get all enabled subscriptions (auto_fetch=1, not disabled).
+ */
+export async function getEnabledSubscriptions(db: D1Database): Promise<SourceRow[]> {
+  const result = await db
+    .prepare(
+      "SELECT * FROM sources WHERE sub_url IS NOT NULL AND auto_fetch = 1 AND sub_status != 'disabled' ORDER BY last_fetched_at ASC"
+    )
+    .all<SourceRow>();
+  return result.results ?? [];
+}
+
+/**
+ * Update source fetch result after a fetch attempt.
+ */
+export async function updateSourceFetchResult(
+  db: D1Database,
+  chatId: number,
+  updates: {
+    status?: string;
+    consecutive_failures?: number;
+    last_fetch_status?: string;
+    last_fetch_error?: string | null;
+    last_config_count?: number;
+    sub_type?: string;
+  }
+): Promise<void> {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status !== undefined) {
+    sets.push("sub_status = ?");
+    values.push(updates.status);
+  }
+  if (updates.consecutive_failures !== undefined) {
+    sets.push("consecutive_failures = ?");
+    values.push(updates.consecutive_failures);
+  }
+  if (updates.last_fetch_status !== undefined) {
+    sets.push("last_fetch_status = ?");
+    values.push(updates.last_fetch_status);
+  }
+  if (updates.last_fetch_error !== undefined) {
+    sets.push("last_fetch_error = ?");
+    values.push(updates.last_fetch_error);
+  }
+  if (updates.last_config_count !== undefined) {
+    sets.push("last_config_count = ?");
+    values.push(updates.last_config_count);
+  }
+  if (updates.sub_type !== undefined) {
+    sets.push("sub_type = ?");
+    values.push(updates.sub_type);
+  }
+
+  sets.push("last_fetched_at = ?");
+  values.push(new Date().toISOString());
+  sets.push("total_fetches = total_fetches + 1");
+  sets.push("updated_at = ?");
+  values.push(new Date().toISOString());
+  values.push(chatId);
+
+  if (sets.length > 0) {
+    await db
+      .prepare("UPDATE sources SET " + sets.join(", ") + " WHERE chat_id = ?")
+      .bind(...values)
+      .run();
+  }
 }

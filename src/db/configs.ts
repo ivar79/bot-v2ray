@@ -24,8 +24,8 @@ export async function insertConfig(
   data: ConfigInsert
 ): Promise<ConfigRow> {
   const stmt = db.prepare(`
-    INSERT INTO configs (protocol, raw, canonical, config_hash, normalized_uri, structured_data, is_valid, active, parser_version)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO configs (protocol, raw, canonical, config_hash, normalized_uri, structured_data, is_valid, active, parser_version, location_country, location_country_code, location_flag, location_display)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = await stmt
@@ -38,7 +38,11 @@ export async function insertConfig(
       data.structured_data ?? null,
       data.is_valid ?? 1,
       data.active ?? 1,
-      data.parser_version ?? "1.0"
+      data.parser_version ?? "1.0",
+      data.location_country ?? null,
+      data.location_country_code ?? null,
+      data.location_flag ?? null,
+      data.location_display ?? null
     )
     .run();
 
