@@ -116,6 +116,7 @@ export async function processCallbackQuery(
       api,
       adminUserIds,
       message: callbackQuery.message!,
+      userId: callbackQuery.from.id,
     };
     await handleMenuAction(action, ctx);
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });

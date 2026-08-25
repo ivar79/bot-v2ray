@@ -44,6 +44,8 @@ export interface CommandContext {
   githubToken?: string;
   /** GitHub API client (optional, injectable for testing). */
   githubApi?: GitHubAPI;
+  /** User ID override for callback queries (callbackQuery.from.id). */
+  userId?: number;
 }
 
 // ─── /start ────────────────────────────────────────────────
@@ -55,7 +57,7 @@ export interface CommandContext {
 export async function handleStart(ctx: CommandContext): Promise<void> {
   const { api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   console.log("[commands] /start: userId=" + userId + " chatId=" + chatId + " isAdmin=" + isAdmin(userId ?? 0, adminUserIds) + " adminIdsConfigured=" + !!adminUserIds);
 
@@ -95,7 +97,7 @@ reply_markup: buildMainMenuKeyboard(),
 export async function handleMenu(ctx: CommandContext): Promise<void> {
   const { api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -121,7 +123,7 @@ export async function handleMenu(ctx: CommandContext): Promise<void> {
 export async function handleHelp(ctx: CommandContext): Promise<void> {
   const { api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -170,7 +172,7 @@ export async function handleHelp(ctx: CommandContext): Promise<void> {
 export async function handleStatus(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -221,7 +223,7 @@ export async function handleStatus(ctx: CommandContext): Promise<void> {
 export async function handleUpload(ctx: CommandContext): Promise<void> {
   const { api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -258,7 +260,7 @@ export async function handleUpload(ctx: CommandContext): Promise<void> {
 export async function handleCancel(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -295,7 +297,7 @@ export async function handleCancel(ctx: CommandContext): Promise<void> {
 export async function handleAddSource(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -354,7 +356,7 @@ export async function handleAddSource(ctx: CommandContext): Promise<void> {
 export async function handleRemoveSource(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -402,7 +404,7 @@ export async function handleRemoveSource(ctx: CommandContext): Promise<void> {
 export async function handleSources(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -469,7 +471,7 @@ export async function handleSources(ctx: CommandContext): Promise<void> {
 export async function handleGenerate(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -537,7 +539,7 @@ export async function handleGenerate(ctx: CommandContext): Promise<void> {
 export async function handlePublish(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds, githubToken } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -635,7 +637,7 @@ export async function handlePublish(ctx: CommandContext): Promise<void> {
 export async function handleSetGithub(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -721,7 +723,7 @@ export async function handleSetGithub(ctx: CommandContext): Promise<void> {
 export async function handleSetOutput(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -846,7 +848,7 @@ async function handleMenuPlaceholder(
 export async function handleAddSub(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -963,7 +965,7 @@ export async function handleAddSub(ctx: CommandContext): Promise<void> {
 export async function handleListSub(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -1053,7 +1055,7 @@ export async function handleListSub(ctx: CommandContext): Promise<void> {
 export async function handleFetchNow(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -1109,7 +1111,7 @@ export async function handleFetchNow(ctx: CommandContext): Promise<void> {
 export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
-  const userId = message.from?.id;
+  const userId = ctx.userId ?? message.from?.id;
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({

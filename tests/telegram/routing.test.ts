@@ -162,5 +162,61 @@ describe("Telegram Update Routing", () => {
       expect(api.answerCallbackQueryCalls.length).toBe(1);
       expect(api.answerCallbackQueryCalls[0].callback_query_id).toBe("cb123");
     });
+
+    it("should route menu:help callback to help handler (admin)", async () => {
+      const callbackQuery: TgCallbackQuery = {
+        id: "cb-help",
+        from: { id: 111111, is_bot: false, first_name: "Admin" },
+        message: {
+          message_id: 10,
+          chat: { id: 111111, type: "private" },
+          date: Date.now(),
+        },
+        data: "menu:help",
+      };
+
+      await processCallbackQuery(callbackQuery, db, api, adminUserIds);
+
+      expect(api.sendMessageCalls.length).toBe(1);
+      expect(api.sendMessageCalls[0].text).toContain("Available Commands");
+      expect(api.sendMessageCalls[0].text).not.toContain("Access denied");
+    });
+
+    it("should deny menu callback from non-admin user", async () => {
+      const callbackQuery: TgCallbackQuery = {
+        id: "cb-deny",
+        from: { id: 999999, is_bot: false, first_name: "Hacker" },
+        message: {
+          message_id: 11,
+          chat: { id: 999999, type: "private" },
+          date: Date.now(),
+        },
+        data: "menu:fetch",
+      };
+
+      await processCallbackQuery(callbackQuery, db, api, adminUserIds);
+
+      expect(api.sendMessageCalls.length).toBe(1);
+      expect(api.sendMessageCalls[0].text).toContain("Access denied");
+    });
+
+    it("should route menu:fetch callback to fetch handler (admin)", async () => {
+      const callbackQuery: TgCallbackQuery = {
+        id: "cb-fetch",
+        from: { id: 222222, is_bot: false, first_name: "Admin2" },
+        message: {
+          message_id: 12,
+          chat: { id: 222222, type: "private" },
+          date: Date.now(),
+        },
+        data: "menu:fetch",
+      };
+
+      await processCallbackQuery(callbackQuery, db, api, adminUserIds);
+
+      // Fetch sends 2 messages: loading + result
+      expect(api.sendMessageCalls.length).toBe(2);
+      expect(api.sendMessageCalls.some(m => m.text.includes("Access denied"))).toBe(false);
+    });
   });
 });
