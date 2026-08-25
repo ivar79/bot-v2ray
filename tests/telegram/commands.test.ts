@@ -181,7 +181,7 @@ describe("Command Handlers", () => {
       expect(commands).toContain("publish");
       expect(commands).toContain("setgithub");
       expect(commands).toContain("setoutput");
-      expect(commands.length).toBe(13);
+      expect(commands.length).toBe(17);
     });
   });
 });

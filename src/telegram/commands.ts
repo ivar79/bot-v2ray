@@ -29,6 +29,8 @@ import { createGitHubAPI, type GitHubAPI } from "../github/api";
 import { getSetting, setSetting } from "../db/settings";
 import { publishToTelegramChannel } from "./output-publisher";
 import { buildMainMenuKeyboard, buildBackKeyboard } from "./keyboard";
+import { getSourceByChatId, insertSource, updateSource } from "../db/sources";
+import { fetchAllSubscriptions } from "../ingest/subscription";
 
 // ─── Command Context ───────────────────────────────────────
 
@@ -802,16 +804,16 @@ export async function handleMenuAction(
       return true;
     // Phase 5 placeholders:
     case "addsub":
-      await handleMenuPlaceholder(ctx, "افزودن اشتراک");
+      await handleAddSub(ctx);
       return true;
     case "listsub":
-      await handleMenuPlaceholder(ctx, "لیست اشتراک‌ها");
+      await handleListSub(ctx);
       return true;
     case "fetch":
-      await handleMenuPlaceholder(ctx, "دریافت الآن");
+      await handleFetchNow(ctx);
       return true;
     case "autofetch":
-      await handleMenuPlaceholder(ctx, "تنظیمات خودکار");
+      await handleAutoFetch(ctx);
       return true;
     default:
       return false;
@@ -834,6 +836,393 @@ async function handleMenuPlaceholder(
     reply_markup: buildBackKeyboard(),
   });
 }
+// ─── /addsub ──────────────────────────────────────────────
+
+/**
+ * Handle /addsub command.
+ * Adds a subscription URL to the sources table.
+ * Usage: /addsub <url> [title]
+ */
+export async function handleAddSub(ctx: CommandContext): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26D4 Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  const text = getMessageText(message);
+  const parts = text.split(/\s+/);
+
+  if (parts.length < 2) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: [
+        "\u2795 <b>\u0627\u0636\u0627\u0641\u0647 \u0627\u0634\u062A\u0631\u0627\u06A9</b>",
+        "",
+        "\u0627\u0633\u062A\u0641\u0627\u062F\u0647:",
+        "/addsub <url> [\u0646\u0627\u0645]",
+        "",
+        "\u0645\u062B\u0627\u0644:",
+        "/addsub https://example.com/sub.txt My Subscription",
+      ].join("\n"),
+      parse_mode: "HTML",
+      reply_markup: buildBackKeyboard(),
+    });
+    return;
+  }
+
+  const subUrl = parts[1];
+  const title = parts.slice(2).join(" ") || undefined;
+
+  // Validate URL
+  try {
+    new URL(subUrl);
+  } catch {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26A0\uFE0F \u0644\u06CC\u0646\u06A9 \u0627\u0631\u062A\u0641\u0627\u0639\u06CC \u0645\u0639\u062A\u0628\u0631 \u0646\u06CC\u0633\u062A. \u0644\u0637\u0641\u0627\u064B \u06CC\u06A9 URL \u0645\u0639\u062A\u0628\u0631 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.",
+      reply_markup: buildBackKeyboard(),
+    });
+    return;
+  }
+
+  try {
+    // Use a unique chat_id based on URL hash for subscription sources
+    const urlHash = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(subUrl)
+    );
+    const hashHex = Array.from(new Uint8Array(urlHash))
+      .slice(0, 8)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    const sourceChatId = parseInt(hashHex, 16);
+
+    // Check if already exists
+    const existing = await getSourceByChatId(db, sourceChatId);
+    if (existing) {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "\u2139\uFE0F \u0627\u06CC\u0646 \u0627\u0634\u062A\u0631\u0627\u06A9 \u0642\u0628\u0644\u0627\u064B \u0627\u0636\u0627\u0641\u0647 \u0634\u062F\u0647 \u0627\u0633\u062A.",
+        reply_markup: buildBackKeyboard(),
+      });
+      return;
+    }
+
+    await insertSource(db, {
+      chat_id: sourceChatId,
+      title: title,
+      type: "subscription",
+      enabled: 1,
+      trusted: 1,
+    });
+
+    // Update with subscription fields
+    await updateSource(db, sourceChatId, {
+      sub_url: subUrl,
+      sub_status: "active",
+      auto_fetch: 1,
+    });
+
+    const displayTitle = title || subUrl.substring(0, 40);
+
+    await api.sendMessage({
+      chat_id: chatId,
+      text: [
+        "\u2705 <b>\u0627\u0634\u062A\u0631\u0627\u06A9 \u0627\u0636\u0627\u0641\u0647 \u0634\u062F</b>",
+        "",
+        "\uD83D\uDCCB " + displayTitle,
+        "\uD83D\uDD17 " + subUrl,
+        "",
+        "\u26A1 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631: \u0641\u0639\u0627\u0644",
+      ].join("\n"),
+      parse_mode: "HTML",
+      reply_markup: buildBackKeyboard(),
+    });
+  } catch {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26A0\uFE0F \u062E\u0637\u0627 \u062F\u0631 \u0627\u0636\u0627\u0641\u0647 \u0627\u0634\u062A\u0631\u0627\u06A9. \u0644\u0637\u0641\u0627\u064B \u062F\u0648\u0628\u0627\u0631\u0647 \u062A\u0644\u0627\u0634 \u06A9\u0646\u06CC\u062F.",
+      reply_markup: buildBackKeyboard(),
+    });
+  }
+}
+
+// ─── /listsub ─────────────────────────────────────────────
+
+/**
+ * Handle /listsub command.
+ * Lists all subscription sources with their status.
+ */
+export async function handleListSub(ctx: CommandContext): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26D4 Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  try {
+    const sources = await getAllSources(db);
+    const subs = sources.filter((s) => s.sub_url);
+
+    if (subs.length === 0) {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: [
+          "\uD83D\uDCCB <b>\u0644\u06CC\u0633\u062A \u0627\u0634\u062A\u0631\u0627\u06A9\u200C\u0647\u0627</b>",
+          "",
+          "\u0647\u06CC\u0686 \u0627\u0634\u062A\u0631\u0627\u06A9\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647 \u0627\u0633\u062A.",
+          "",
+          "\u0628\u0631\u0627\u06CC \u0627\u0636\u0627\u0641\u0647\u0646 \u0627\u0634\u062A\u0631\u0627\u06A9 \u062C\u062F\u06CC\u062F \u0627\u0632:",
+          "/addsub <url> [\u0646\u0627\u0645]",
+        ].join("\n"),
+        parse_mode: "HTML",
+        reply_markup: buildBackKeyboard(),
+      });
+      return;
+    }
+
+    const lines: string[] = [
+      "\uD83D\uDCCB <b>\u0644\u06CC\u0633\u062A \u0627\u0634\u062A\u0631\u0627\u06A9\u200C\u0647\u0627</b>",
+      "",
+    ];
+
+    for (const sub of subs) {
+      const statusIcon =
+        sub.auto_fetch && sub.sub_status === "active"
+          ? "\u26A1"
+          : sub.sub_status === "inactive"
+            ? "\u274C"
+            : "\u23F8\uFE0F";
+      const title = sub.title || sub.sub_url?.substring(0, 30) || "Sub";
+      const autoFetch = sub.auto_fetch ? "\u26A1" : "";
+      const lastFetch = sub.last_fetched_at
+        ? "\n    \uD83D\uDCC5 " + new Date(sub.last_fetched_at).toLocaleDateString()
+        : "";
+      const configCount = sub.last_config_count
+        ? " | \uD83D\uDCCA " + sub.last_config_count + " \u06A9\u0646\u0641\u06CC\u06AF"
+        : "";
+      const failures =
+        sub.consecutive_failures > 0
+          ? " | \u26A0\uFE0F " + sub.consecutive_failures + " \u062E\u0637\u0627"
+          : "";
+
+      lines.push(
+        statusIcon + " <b>" + title + "</b> " + autoFetch,
+        "  \uD83D\uDD17 " + (sub.sub_url || "").substring(0, 50),
+        "  " + (sub.sub_status || "unknown") + configCount + failures + lastFetch,
+        ""
+      );
+    }
+
+    lines.push("\uD83D\uDCCF \u06A9\u0644: " + subs.length);
+
+    await api.sendMessage({
+      chat_id: chatId,
+      text: lines.join("\n"),
+      parse_mode: "HTML",
+      reply_markup: buildBackKeyboard(),
+    });
+  } catch {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26A0\uFE0F \u062E\u0637\u0627 \u062F\u0631 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0644\u06CC\u0633\u062A.",
+      reply_markup: buildBackKeyboard(),
+    });
+  }
+}
+
+// ─── /fetch ───────────────────────────────────────────────
+
+/**
+ * Handle /fetch command.
+ * Triggers manual fetch of all enabled subscriptions.
+ */
+export async function handleFetchNow(ctx: CommandContext): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26D4 Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  await api.sendMessage({
+    chat_id: chatId,
+    text: "\uD83D\uDD04 <b>\u062F\u0631 \u062D\u0627\u0644 \u062F\u0631\u06CC\u0627\u0641\u062A...</b>",
+    parse_mode: "HTML",
+  });
+
+  try {
+    const result = await fetchAllSubscriptions(db);
+
+    const lines: string[] = [
+      "\u2705 <b>\u0646\u062A\u06CC\u062C\u0647 \u062F\u0631\u06CC\u0627\u0641\u062A</b>",
+      "",
+      "\uD83D\uDCCA \u06A9\u0644 \u067E\u0631\u062F\u0627\u0632\u0634: " + result.totalProcessed,
+      "\u2705 \u0645\u0648\u0641\u0642: " + result.successCount,
+      "\u274C \u0646\u0627\u0645\u0648\u0641\u0642: " + result.failCount,
+    ];
+
+    if (result.skipCount > 0) {
+      lines.push("\u23F8\uFE0F \u0631\u062E\u0634\u062F\u0647: " + result.skipCount);
+    }
+
+    await api.sendMessage({
+      chat_id: chatId,
+      text: lines.join("\n"),
+      parse_mode: "HTML",
+      reply_markup: buildBackKeyboard(),
+    });
+  } catch {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26A0\uFE0F \u062E\u0637\u0627 \u062F\u0631 \u062F\u0631\u06CC\u0627\u0641\u062A. \u0644\u0637\u0641\u0627\u064B \u0628\u0639\u062F\u0627 \u062A\u0644\u0627\u0634 \u06A9\u0646\u06CC\u062F.",
+      reply_markup: buildBackKeyboard(),
+    });
+  }
+}
+
+// ─── /autofetch ───────────────────────────────────────────
+
+/**
+ * Handle /autofetch command.
+ * Configures auto-fetch settings.
+ * Usage: /autofetch [on|off|interval <hours>]
+ */
+export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u26D4 Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  const text = getMessageText(message);
+  const parts = text.split(/\s+/);
+
+  // No arguments — show current settings
+  if (parts.length < 2) {
+    const sources = await getAllSources(db);
+    const subs = sources.filter((s) => s.sub_url);
+    const activeCount = subs.filter(
+      (s) => s.auto_fetch && s.sub_status === "active"
+    ).length;
+    const interval =
+      subs.length > 0 ? subs[0].fetch_interval_hours : 24;
+
+    await api.sendMessage({
+      chat_id: chatId,
+      text: [
+        "\u2699\uFE0F <b>\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631</b>",
+        "",
+        "\u0627\u0634\u062A\u0631\u0627\u06A9\u200C\u0647\u0627 \u0628\u0627 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631: " + activeCount + "/" + subs.length,
+        "\u0628\u0632\u0645\u0627\u0646 \u062F\u0631\u06CC\u0627\u0641\u062A: " + interval + " \u0633\u0627\u0639\u062A",
+        "",
+        "\u0627\u0633\u062A\u0641\u0627\u062F\u0647:",
+        "/autofetch on — \u0641\u0639\u0627\u0644 \u06A9\u0631\u062F\u0646",
+        "/autofetch off — \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u06A9\u0631\u062F\u0646",
+        "/autofetch interval <\u0633\u0627\u0639\u062A> — \u062A\u063A\u06CC\u06CC\u0631 \u0628\u0632\u0645\u0627\u0646",
+      ].join("\n"),
+      parse_mode: "HTML",
+      reply_markup: buildBackKeyboard(),
+    });
+    return;
+  }
+
+  const action = parts[1].toLowerCase();
+
+  if (action === "on") {
+    const sources = await getAllSources(db);
+    const subs = sources.filter((s) => s.sub_url);
+    let count = 0;
+    for (const sub of subs) {
+      if (!sub.auto_fetch) {
+        await updateSource(db, sub.chat_id, { auto_fetch: 1 });
+        count++;
+      }
+    }
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u2705 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + count + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u0641\u0639\u0627\u0644 \u0634\u062F.",
+      reply_markup: buildBackKeyboard(),
+    });
+    return;
+  }
+
+  if (action === "off") {
+    const sources = await getAllSources(db);
+    const subs = sources.filter((s) => s.sub_url);
+    let count = 0;
+    for (const sub of subs) {
+      if (sub.auto_fetch) {
+        await updateSource(db, sub.chat_id, { auto_fetch: 0 });
+        count++;
+      }
+    }
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u274C \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + count + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u0634\u062F.",
+      reply_markup: buildBackKeyboard(),
+    });
+    return;
+  }
+
+  if (action === "interval" && parts.length >= 3) {
+    const hours = parseInt(parts[2], 10);
+    if (isNaN(hours) || hours < 1 || hours > 168) {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "\u26A0\uFE0F \u0628\u0632\u0645\u0627\u0646 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A. \u0645\u0642\u062F\u0645: 1 \u062A\u0627 168 \u0633\u0627\u0639\u062F.",
+        reply_markup: buildBackKeyboard(),
+      });
+      return;
+    }
+    const sources = await getAllSources(db);
+    const subs = sources.filter((s) => s.sub_url);
+    for (const sub of subs) {
+      await db
+        .prepare("UPDATE sources SET fetch_interval_hours = ? WHERE chat_id = ?")
+        .bind(hours, sub.chat_id)
+        .run();
+    }
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "\u2705 \u0628\u0632\u0645\u0627\u0646 \u062F\u0631\u06CC\u0627\u0641\u062A \u0628\u0647 " + hours + " \u0633\u0627\u0639\u062A \u062A\u063A\u06CC\u06CC\u0631 \u06A9\u0631\u062F.",
+      reply_markup: buildBackKeyboard(),
+    });
+    return;
+  }
+
+  // Unknown subcommand
+  await api.sendMessage({
+    chat_id: chatId,
+    text: "\u26A0\uFE0F \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u0646\u0627\u0634\u0646\u0627\u062E\u062A\u0647. \u0628\u0631\u0627\u06CC \u0631\u0627\u0647\u0646\u0645\u0627\u06CC\u06CC /autofetch \u062A\u0648\u0633\u06CC\u0637 \u06A9\u0646\u06CC\u062F.",
+    reply_markup: buildBackKeyboard(),
+  });
+}
+
 /** Command handler function signature. */
 export type CommandHandler = (ctx: CommandContext) => Promise<void>;
 
@@ -852,6 +1241,10 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   setgithub: handleSetGithub,
   setoutput: handleSetOutput,
   menu: handleMenu,
+  addsub: handleAddSub,
+  listsub: handleListSub,
+  fetch: handleFetchNow,
+  autofetch: handleAutoFetch,
 };
 
 /**
