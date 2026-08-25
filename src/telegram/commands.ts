@@ -46,6 +46,8 @@ export interface CommandContext {
   githubApi?: GitHubAPI;
   /** User ID override for callback queries (callbackQuery.from.id). */
   userId?: number;
+  /** True when invoked from inline keyboard callback (not a /command). */
+  isCallback?: boolean;
 }
 
 // ─── /start ────────────────────────────────────────────────
@@ -855,6 +857,17 @@ export async function handleAddSub(ctx: CommandContext): Promise<void> {
     await api.sendMessage({
       chat_id: chatId,
       text: "\u26D4 Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  // Button press -> always enter conversation mode
+  if (ctx.isCallback) {
+    await setAdminState(db, userId, "awaiting_sub_url", { flow: "addsub" });
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "لینک اشتراک را ارسال کنید:\n\nمثال: https://example.com/sub.txt",
+      reply_markup: buildSubPromptKeyboard(),
     });
     return;
   }
