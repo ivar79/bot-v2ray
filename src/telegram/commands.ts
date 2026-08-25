@@ -28,6 +28,7 @@ import { publishToGitHub, createPublisherConfig } from "../github/publisher";
 import { createGitHubAPI, type GitHubAPI } from "../github/api";
 import { getSetting, setSetting } from "../db/settings";
 import { publishToTelegramChannel } from "./output-publisher";
+import { buildMainMenuKeyboard, buildBackKeyboard } from "./keyboard";
 
 // ─── Command Context ───────────────────────────────────────
 
@@ -77,11 +78,38 @@ export async function handleStart(ctx: CommandContext): Promise<void> {
       "",
       "Operator metadata is based on administrator-provided verification.",
     ].join("\n"),
+reply_markup: buildMainMenuKeyboard(),
     parse_mode: "HTML",
   });
   console.log("[commands] /start: welcome sendMessage=" + r2);
 }
 
+// ─── /menu ─────────────────────────────────────────────────
+
+/**
+ * Handle /menu command.
+ * Shows the inline keyboard menu for mobile-friendly interaction.
+ */
+export async function handleMenu(ctx: CommandContext): Promise<void> {
+  const { api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⛔ Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  await api.sendMessage({
+    chat_id: chatId,
+    text: "📱 <b>منوی اصلی</b>\n\nیکی از عملیات زیر را انتخاب کنید:",
+    parse_mode: "HTML",
+    reply_markup: buildMainMenuKeyboard(),
+  });
+}
 // ─── /help ─────────────────────────────────────────────────
 
 /**
@@ -754,6 +782,58 @@ export async function handleSetOutput(ctx: CommandContext): Promise<void> {
 
 // ─── Command Registry ──────────────────────────────────────
 
+// ─── Menu Action Dispatcher ────────────────────────────────
+
+/**
+ * Dispatch a menu callback action to the appropriate handler.
+ * Used by processCallbackQuery for menu:* callbacks.
+ * Returns true if the action was handled.
+ */
+export async function handleMenuAction(
+  action: string,
+  ctx: CommandContext
+): Promise<boolean> {
+  switch (action) {
+    case "help":
+      await handleHelp(ctx);
+      return true;
+    case "back":
+      await handleMenu(ctx);
+      return true;
+    // Phase 5 placeholders:
+    case "addsub":
+      await handleMenuPlaceholder(ctx, "افزودن اشتراک");
+      return true;
+    case "listsub":
+      await handleMenuPlaceholder(ctx, "لیست اشتراک‌ها");
+      return true;
+    case "fetch":
+      await handleMenuPlaceholder(ctx, "دریافت الآن");
+      return true;
+    case "autofetch":
+      await handleMenuPlaceholder(ctx, "تنظیمات خودکار");
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Temporary placeholder for Phase 5 features.
+ * Shows "coming soon" message with back-to-menu button.
+ */
+async function handleMenuPlaceholder(
+  ctx: CommandContext,
+  featureName: string
+): Promise<void> {
+  const { api, message } = ctx;
+  await api.sendMessage({
+    chat_id: message.chat.id,
+    text: "🚧 <b>" + featureName + "</b>\n\nدر حال حاضر این قابلیت به\u200cزودی اضافه خواهد شد.",
+    parse_mode: "HTML",
+    reply_markup: buildBackKeyboard(),
+  });
+}
 /** Command handler function signature. */
 export type CommandHandler = (ctx: CommandContext) => Promise<void>;
 
@@ -771,6 +851,7 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   publish: handlePublish,
   setgithub: handleSetGithub,
   setoutput: handleSetOutput,
+  menu: handleMenu,
 };
 
 /**

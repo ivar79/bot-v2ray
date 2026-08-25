@@ -11,7 +11,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import type { TgMessage, TgChannelPost, TgCallbackQuery } from "./types";
 import { getMessageText, isPrivateChat, isChannelChat } from "./types";
 import type { TelegramBotAPI } from "./api";
-import { executeCommand } from "./commands";
+import { executeCommand, handleMenuAction } from "./commands";
 import { isAdmin } from "./auth";
 import { handleTextUpload, handleDocumentUpload, handleOperatorSelection } from "../ingest/admin";
 import { handleChannelPost } from "../ingest/channel";
@@ -108,7 +108,21 @@ export async function processCallbackQuery(
 
   if (!data) return;
 
-  // Handle operator selection callbacks (op:operator_name)
+  // Handle menu button presses (menu:action)
+  if (data.startsWith("menu:")) {
+    const action = data.slice(5); // Remove "menu:" prefix
+    const ctx = {
+      db,
+      api,
+      adminUserIds,
+      message: callbackQuery.message!,
+    };
+    await handleMenuAction(action, ctx);
+    await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+    return;
+  }
+
+    // Handle operator selection callbacks (op:operator_name)
   if (data.startsWith("op:")) {
     const operator = data.slice(3); // Remove "op:" prefix
     const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
