@@ -20,7 +20,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { countConfigs } from "../db/configs";
 import { countSources, getAllSources } from "../db/sources";
 import { countBatches } from "../db/batches";
-import { getAdminStateName, clearAdminState } from "../db/admin-states";
+import { getAdminStateName, clearAdminState, setAdminState } from "../db/admin-states";
 import { addTrustedSource, removeTrustedSource } from "../ingest/channel";
 import { generateAllOutputs } from "../output/generator";
 import { countActiveConfigs, countConfigsByProtocol } from "../db/configs";
@@ -28,7 +28,7 @@ import { publishToGitHub, createPublisherConfig } from "../github/publisher";
 import { createGitHubAPI, type GitHubAPI } from "../github/api";
 import { getSetting, setSetting } from "../db/settings";
 import { publishToTelegramChannel } from "./output-publisher";
-import { buildMainMenuKeyboard, buildBackKeyboard } from "./keyboard";
+import { buildMainMenuKeyboard, buildBackKeyboard, buildAutoFetchKeyboard, buildSubPromptKeyboard } from "./keyboard";
 import { getSourceByChatId, insertSource, updateSource } from "../db/sources";
 import { fetchAllSubscriptions } from "../ingest/subscription";
 
@@ -159,7 +159,8 @@ export async function handleHelp(ctx: CommandContext): Promise<void> {
       "/setgithub — Set GitHub repo settings",
       "/setoutput — Set Telegram output channel",
     ].join("\n"),
-    parse_mode: "HTML",
+      reply_markup: buildBackKeyboard(),
+parse_mode: "HTML",
   });
 }
 
@@ -862,23 +863,14 @@ export async function handleAddSub(ctx: CommandContext): Promise<void> {
   const parts = text.split(/\s+/);
 
   if (parts.length < 2) {
+    await setAdminState(db, userId, "awaiting_sub_url", { flow: "addsub" });
     await api.sendMessage({
       chat_id: chatId,
-      text: [
-        "\u2795 <b>\u0627\u0636\u0627\u0641\u0647 \u0627\u0634\u062A\u0631\u0627\u06A9</b>",
-        "",
-        "\u0627\u0633\u062A\u0641\u0627\u062F\u0647:",
-        "/addsub <url> [\u0646\u0627\u0645]",
-        "",
-        "\u0645\u062B\u0627\u0644:",
-        "/addsub https://example.com/sub.txt My Subscription",
-      ].join("\n"),
-      parse_mode: "HTML",
-      reply_markup: buildBackKeyboard(),
+      text: "🔗 لینک اشتراک را ارسال کنید:\n\nمثال: https://example.com/sub.txt",
+      reply_markup: buildSubPromptKeyboard(),
     });
     return;
   }
-
   const subUrl = parts[1];
   const title = parts.slice(2).join(" ") || undefined;
 
@@ -1148,7 +1140,7 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
         "/autofetch interval <\u0633\u0627\u0639\u062A> — \u062A\u063A\u06CC\u06CC\u0631 \u0628\u0632\u0645\u0627\u0646",
       ].join("\n"),
       parse_mode: "HTML",
-      reply_markup: buildBackKeyboard(),
+      reply_markup: buildAutoFetchKeyboard(),
     });
     return;
   }

@@ -36,7 +36,7 @@ describe("Telegram Keyboard", () => {
     it("should all start with menu: prefix", () => {
       const values = Object.values(MENU_CB);
       for (const val of values) {
-        expect(val).toMatch(/^menu:/);
+        expect(val).toMatch(/^(menu|autofetch|sub):/);
       }
     });
   });
