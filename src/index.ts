@@ -58,7 +58,9 @@ export default {
 
         return await handleWebhookRequest(
           request,
-          env
+          env,
+          undefined,
+          ctx
         );
 
       } catch(error){

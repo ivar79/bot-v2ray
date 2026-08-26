@@ -49,7 +49,11 @@ export async function handleWebhookRequest(
     GITHUB_TOKEN?: string;
   },
   /** Optional API override for testing. If omitted, creates a real client. */
-  apiOverride?: TelegramBotAPI
+  apiOverride?: TelegramBotAPI,
+  /** Execution context for background processing. When provided, the update is
+   *  routed asynchronously via ctx.waitUntil so long-running handlers never
+   *  hit the Telegram webhook timeout. */
+  ctx?: ExecutionContext
 ): Promise<Response> {
   // ── Step 1: Verify webhook secret ──
   const secretToken = request.headers.get("x-telegram-bot-api-secret-token");
@@ -112,13 +116,23 @@ export async function handleWebhookRequest(
   await markUpdateProcessed(env.DB, update.update_id);
 
   // ── Step 4: Route the update ──
-  try {
-    const api = apiOverride ?? createTelegramBotAPI(env.TELEGRAM_BOT_TOKEN);
-    await routeUpdate(update, env.DB, api, env.ADMIN_USER_IDS, env.GITHUB_TOKEN, undefined);
-  } catch (e) {
-    // Log the error so it's visible via `wrangler tail` — but don't expose
-    // internal errors to Telegram. Still return 200 to prevent retries.
-    console.error("[webhook] routeUpdate failed: update_id=" + update.update_id + " error=" + (e instanceof Error ? (e.stack ?? e.message) : String(e)));
+  const api = apiOverride ?? createTelegramBotAPI(env.TELEGRAM_BOT_TOKEN);
+  const runRoute = (): Promise<void> =>
+    routeUpdate(update, env.DB, api, env.ADMIN_USER_IDS, env.GITHUB_TOKEN, undefined)
+      .catch((e) => {
+        // Log the error so it's visible via `wrangler tail` — but don't expose
+        // internal errors to Telegram. Still return 200 to prevent retries.
+        console.error("[webhook] routeUpdate failed: update_id=" + update.update_id + " error=" + (e instanceof Error ? (e.stack ?? e.message) : String(e)));
+      });
+
+  if (ctx) {
+    // Acknowledge Telegram immediately and process the update in the
+    // background so long-running handlers (e.g. a manual subscription
+    // fetch that auto-publishes new config cards) never hit the webhook
+    // timeout and get cancelled/retried mid-flight.
+    ctx.waitUntil(runRoute());
+  } else {
+    await runRoute();
   }
 
   return new Response("OK", { status: 200 });

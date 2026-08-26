@@ -244,6 +244,24 @@ describe("Webhook Handler", () => {
       expect(firstResponse.status).toBe(200);
       expect(sendCount).toBe(1);
     });
+
+    it("should acknowledge immediately and process in the background when ctx is provided", async () => {
+      const update = makeUpdate(6001);
+      const api = getMockApi();
+      const tasks: Promise<unknown>[] = [];
+      const fakeCtx = {
+        waitUntil: (p: Promise<unknown>) => { tasks.push(p); },
+      } as unknown as ExecutionContext;
+
+      const response = await handleWebhookRequest(makeRequest(update), makeEnv(db), api, fakeCtx);
+
+      // Webhook answers 200 right away; the update is routed in the background
+      expect(response.status).toBe(200);
+      expect(tasks.length).toBe(1);
+
+      await tasks[0];
+      expect(api.sendMessageCalls.length).toBeGreaterThan(0);
+    });
   });
 
   describe("Update Routing", () => {
