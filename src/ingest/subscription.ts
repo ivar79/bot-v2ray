@@ -10,6 +10,8 @@ import { getEnabledSubscriptions, updateSourceFetchResult } from "../db/sources"
 import { createBatch, completeBatchRun, failBatchRun } from "./batch";
 import { runPipeline } from "./pipeline";
 import { tryDecodeBase64 } from "../utils/base64";
+import type { TelegramBotAPI } from "../telegram/api";
+import { autoPublishConfigs, type AutoPublishResult } from "../telegram/output-publisher";
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
@@ -37,6 +39,8 @@ export interface SubscriptionProcessResult {
   duplicateCount: number;
   format: SubFormat;
   error?: string;
+  /** IDs of configs newly inserted during this fetch (for auto-publish). */
+  newConfigIds: number[];
 }
 
 export interface FetchAllResult {
@@ -44,6 +48,10 @@ export interface FetchAllResult {
   successCount: number;
   failCount: number;
   skipCount: number;
+  /** Per-source failure reasons (for user-facing reporting). */
+  errors: string[];
+  /** Result of auto-publishing new configs (undefined when no API client). */
+  published?: AutoPublishResult;
 }
 
 export async function fetchWithLimits(url: string): Promise<FetchResult> {
@@ -156,27 +164,27 @@ export async function fetchSingleSubscription(db: D1Database, sub: SourceRow): P
   const chatId = sub.chat_id;
   const title = sub.title ?? sub.sub_url ?? "Sub #" + chatId;
   const prevStatus = sub.sub_status;
-  if (!sub.sub_url) return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "No URL" };
+  if (!sub.sub_url) return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "No URL", newConfigIds: [] };
   const fr = await fetchWithLimits(sub.sub_url);
   if (!fr.success || !fr.content) {
     const fc = sub.consecutive_failures + 1;
     const ns = fc >= AUTO_DISABLE_THRESHOLD ? "inactive" : prevStatus;
     await updateSourceFetchResult(db, chatId, { status: ns, consecutive_failures: fc, last_fetch_status: "error", last_fetch_error: fr.error ?? "Unknown" });
-    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: fr.error };
+    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: fr.error, newConfigIds: [] };
   }
   const format = detectFormat(fr.content);
   if (format === "unknown") {
     const fc = sub.consecutive_failures + 1;
     const ns = fc >= AUTO_DISABLE_THRESHOLD ? "inactive" : prevStatus;
     await updateSourceFetchResult(db, chatId, { status: ns, consecutive_failures: fc, last_fetch_status: "error", last_fetch_error: "Unrecognized format", sub_type: "unknown" });
-    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Unrecognized format" };
+    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Unrecognized format", newConfigIds: [] };
   }
   const raw = extractConfigs(fr.content, format);
   if (raw.length === 0) {
     const fc = sub.consecutive_failures + 1;
     const ns = fc >= AUTO_DISABLE_THRESHOLD ? "inactive" : prevStatus;
     await updateSourceFetchResult(db, chatId, { status: ns, consecutive_failures: fc, last_fetch_status: "success", last_config_count: 0, sub_type: format });
-    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format, error: "No configs" };
+    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format, error: "No configs", newConfigIds: [] };
   }
   const limited = raw.slice(0, MAX_CONFIGS_PER_SUB);
   const batch = await createBatch({ db, sourceType: "subscription", sourceChatId: chatId, operator: "unknown" });
@@ -185,24 +193,53 @@ export async function fetchSingleSubscription(db: D1Database, sub: SourceRow): P
     const result = await runPipeline(limited.join(nl), { db, batchId: batch.batchId, sourceType: "subscription", sourceChatId: chatId });
     await completeBatchRun(db, batch.collectionRunId, result);
     await updateSourceFetchResult(db, chatId, { status: "active", consecutive_failures: 0, last_fetch_status: "success", last_config_count: limited.length, sub_type: format });
-    return { sourceChatId: chatId, title, success: true, configCount: limited.length, newCount: result.newCount, duplicateCount: result.duplicateCount, format };
+    const newConfigIds = result.configs
+      .filter((c) => c.isNew && c.configId !== null)
+      .map((c) => c.configId as number);
+    return { sourceChatId: chatId, title, success: true, configCount: limited.length, newCount: result.newCount, duplicateCount: result.duplicateCount, format, newConfigIds };
   } catch (e) {
     await failBatchRun(db, batch.collectionRunId, "Pipeline error");
     await updateSourceFetchResult(db, chatId, { last_fetch_status: "error", last_fetch_error: "Pipeline error", sub_type: format });
-    return { sourceChatId: chatId, title, success: false, configCount: limited.length, newCount: 0, duplicateCount: 0, format, error: "Pipeline error" };
+    return { sourceChatId: chatId, title, success: false, configCount: limited.length, newCount: 0, duplicateCount: 0, format, error: "Pipeline error", newConfigIds: [] };
   }
 }
 
-export async function fetchAllSubscriptions(db: D1Database): Promise<FetchAllResult> {
+export async function fetchAllSubscriptions(
+  db: D1Database,
+  api?: TelegramBotAPI
+): Promise<FetchAllResult> {
   const subs = await getEnabledSubscriptions(db);
   let sc = 0, fc = 0, sk = 0;
+  const errors: string[] = [];
+  const newConfigIds: number[] = [];
   const toProcess = subs.slice(0, MAX_SUBS_PER_CYCLE);
   for (const sub of toProcess) {
     if (!shouldFetch(sub)) { sk++; continue; }
     const r = await fetchSingleSubscription(db, sub);
-    if (r.success) sc++; else fc++;
+    if (r.success) {
+      sc++;
+      newConfigIds.push(...r.newConfigIds);
+    } else {
+      fc++;
+      if (r.error) errors.push((r.title ?? "Sub") + ": " + r.error);
+    }
   }
-  return { totalProcessed: toProcess.length, successCount: sc, failCount: fc, skipCount: sk };
+
+  // Auto-publish newly collected configs to the output channel when an
+  // API client is available (manual /send no longer required).
+  let published: AutoPublishResult | undefined;
+  if (api && newConfigIds.length > 0) {
+    try {
+      published = await autoPublishConfigs(db, api, newConfigIds);
+      if (published.published) {
+        console.log("[subscription] auto-published new configs: sent=" + published.sentCount + " total=" + published.totalCount);
+      }
+    } catch (e) {
+      console.error("[subscription] auto-publish failed: " + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  return { totalProcessed: toProcess.length, successCount: sc, failCount: fc, skipCount: sk, errors, published };
 }
 
 function shouldFetch(sub: SourceRow): boolean {

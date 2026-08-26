@@ -20,6 +20,7 @@ import {
   type TelegramPublishResult,
 } from "../../src/telegram/output-publisher";
 import { setSetting } from "../../src/db/settings";
+import { insertConfig } from "../../src/db/configs";
 import { processMessage } from "../../src/telegram/routing";
 
 // ─── Test Helpers ─────────────────────────────────────────
@@ -394,4 +395,60 @@ describe("sendConfigCards()", () => {
   });
 });
 
+});
+
+
+describe("autoPublishConfigs()", () => {
+  let db: ReturnType<typeof createTestDB>;
+  let api: MockTelegramBotAPI;
+
+  beforeEach(() => {
+    db = createTestDB();
+    api = new MockTelegramBotAPI();
+  });
+
+  it("sends newly fetched configs to the output channel", async () => {
+    await setSetting(db, "output_channel_id", "-100123");
+    const cfg = await insertConfig(db, {
+      protocol: "vless",
+      raw: "vless://uuid@x.com:443?security=tls#OldName",
+      canonical: "vless://uuid@x.com:443/#OldName",
+      config_hash: "h1",
+    });
+
+    const { autoPublishConfigs } = await import("../../src/telegram/output-publisher");
+    const result = await autoPublishConfigs(db, api, [cfg.id]);
+
+    expect(result.published).toBe(true);
+    expect(result.sentCount).toBe(1);
+    expect(api.sendMessageCalls.length).toBe(1);
+    expect(api.sendMessageCalls[0].chat_id).toBe(-100123);
+    expect(api.sendMessageCalls[0].text).toContain("Premium V2Ray Config");
+  });
+
+  it("skips silently when the output channel is not configured", async () => {
+    const cfg = await insertConfig(db, {
+      protocol: "vless",
+      raw: "vless://a@x.com:443",
+      canonical: "vless://a@x.com:443/",
+      config_hash: "h2",
+    });
+
+    const { autoPublishConfigs } = await import("../../src/telegram/output-publisher");
+    const result = await autoPublishConfigs(db, api, [cfg.id]);
+
+    expect(result.published).toBe(false);
+    expect(result.sentCount).toBe(0);
+    expect(api.sendMessageCalls.length).toBe(0);
+  });
+
+  it("returns zero for an empty config id list", async () => {
+    await setSetting(db, "output_channel_id", "-100123");
+
+    const { autoPublishConfigs } = await import("../../src/telegram/output-publisher");
+    const result = await autoPublishConfigs(db, api, []);
+
+    expect(result.published).toBe(false);
+    expect(result.totalCount).toBe(0);
+  });
 });

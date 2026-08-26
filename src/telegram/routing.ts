@@ -11,13 +11,13 @@ import type { D1Database } from "@cloudflare/workers-types";
 import type { TgMessage, TgChannelPost, TgCallbackQuery } from "./types";
 import { getMessageText, isPrivateChat, isChannelChat } from "./types";
 import type { TelegramBotAPI } from "./api";
-import { executeCommand, handleMenuAction, handleSendCommand, handleSetRemark, handleSetWelcome, handleSendAction, type CommandContext } from "./commands";
+import { executeCommand, handleMenuAction, handleSendCommand, handleSetRemark, handleSetWelcome, handleSendAction, handleDeleteSub, type CommandContext } from "./commands";
 import { isAdmin } from "./auth";
 import { handleTextUpload, handleDocumentUpload, handleOperatorSelection } from "../ingest/admin";
 import { handleChannelPost } from "../ingest/channel";
 import { dispatchConversationState } from "./conversations";
 import { clearAdminState } from "../db/admin-states";
-import { buildAutoFetchKeyboard, buildBackKeyboard } from "./keyboard";
+import { buildAutoFetchKeyboard, buildBackKeyboard, buildMainMenuKeyboard } from "./keyboard";
 import { getAllSources, updateSource } from "../db/sources";
 import { getSetting } from "../db/settings";
 import type { GitHubAPI } from "../github/api";
@@ -130,6 +130,14 @@ export async function processCallbackQuery(
 
   if (!data) return;
 
+  // Any button press exits an active conversation flow —
+  // this makes the cancel/back buttons work from anywhere.
+  try {
+    await clearAdminState(db, userId);
+  } catch {
+    // Best-effort: conversation state cleanup must never break routing
+  }
+
   // Handle menu button presses (menu:action)
   if (data.startsWith("menu:")) {
     const action = data.slice(5); // Remove "menu:" prefix
@@ -146,10 +154,15 @@ export async function processCallbackQuery(
       userId: callbackQuery.from.id,
       isCallback: true,
     };
+    let handled = false;
     try {
-      await handleMenuAction(action, ctx);
+      handled = await handleMenuAction(action, ctx);
     } catch (e) {
       console.error("[routing] handleMenuAction failed: action=" + action + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
+    if (!handled) {
+      await sendStaleButtonHint(api, callbackQuery);
+      return;
     }
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
@@ -215,12 +228,57 @@ export async function processCallbackQuery(
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
-  // Other callback types — acknowledge
+  // Handle subscription delete buttons (del_sub:<chat_id>)
+  if (data.startsWith("del_sub:")) {
+    const subChatId = parseInt(data.slice(8), 10);
+    if (isNaN(subChatId)) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+      return;
+    }
+    if (!callbackQuery.message) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
+    const ctx = { db, api, adminUserIds, message: callbackQuery.message, userId: callbackQuery.from.id, isCallback: true };
+    try {
+      await handleDeleteSub(subChatId, ctx);
+    } catch (e) {
+      console.error("[routing] del_sub failed: chatId=" + subChatId + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
+    await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+    return;
+  }
+
+  // Unknown / stale callback data (e.g. buttons from an older deployed
+  // version, or old operator selection keys) — tell the user to open a
+  // fresh menu instead of staying silent.
+  await sendStaleButtonHint(api, callbackQuery);
+}
+
+
+/**
+ * Reply to a callback query whose data is unknown or stale (e.g. buttons
+ * from an older deployed version). Sends a visible hint to open a fresh
+ * menu and answers the callback so the loading spinner is dismissed.
+ */
+async function sendStaleButtonHint(
+  api: TelegramBotAPI,
+  callbackQuery: TgCallbackQuery
+): Promise<void> {
+  const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
+  try {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⚠️ این دکمه متعلق به نسخه قدیمی ربات است و دیگر کار نمی‌کند.\nبرای ادامه، /menu بزنید.",
+      reply_markup: buildMainMenuKeyboard(),
+    });
+  } catch {
+    // Best-effort: never break callback handling
+  }
   await api.answerCallbackQuery({
     callback_query_id: callbackQuery.id,
   });
 }
-
 
 async function handleAutoFetchAction(action: string, ctx: CommandContext): Promise<void> {
   const { db, api, message } = ctx;

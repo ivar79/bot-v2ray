@@ -18,8 +18,16 @@ export const MENU_CB = {
   LIST_SUBS:  "menu:listsub",
   FETCH_NOW:  "menu:fetch",
   AUTO_FETCH: "menu:autofetch",
+  SEND:       "menu:send",
+  SET_REMARK: "menu:setremark",
+  SET_WELCOME: "menu:setwelcome",
   HELP:       "menu:help",
   BACK:       "menu:back",
+  // Send-to-channel actions
+  SEND_FILES:   "send:files",
+  SEND_RECENT:  "send:recent",
+  SEND_ALL:     "send:all",
+  SEND_CANCEL:  "send:cancel",
   // Autofetch sub-actions
   AF_ON:      "autofetch:on",
   AF_OFF:     "autofetch:off",
@@ -52,6 +60,11 @@ export function buildMainMenuKeyboard(): TgInlineKeyboardMarkup {
         { text: "⚙️ تنظیمات خودکار", callback_data: MENU_CB.AUTO_FETCH },
       ],
       [
+        { text: "📤 ارسال به کانال", callback_data: MENU_CB.SEND },
+        { text: "🏷️ قالب نام", callback_data: MENU_CB.SET_REMARK },
+      ],
+      [
+        { text: "👋 پیام خوش‌آمد", callback_data: MENU_CB.SET_WELCOME },
         { text: "❓ راهنما", callback_data: MENU_CB.HELP },
       ],
     ],
@@ -104,6 +117,30 @@ export function buildSubPromptKeyboard(): TgInlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [{ text: "❌ لغو", callback_data: MENU_CB.SUB_CANCEL }],
+    ],
+  };
+}
+
+// ─── Send-to-Channel Keyboard ─────────────────────────────
+
+/**
+ * Build the send-to-channel inline keyboard.
+ * Shown when admin taps 📤 button or uses /send.
+ */
+export function buildSendKeyboard(): TgInlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "📄 ارسال فایل‌ها", callback_data: MENU_CB.SEND_FILES },
+        { text: "🆕 کانفیگ‌های اخیر", callback_data: MENU_CB.SEND_RECENT },
+      ],
+      [
+        { text: "🗂️ همه کانفیگ‌ها", callback_data: MENU_CB.SEND_ALL },
+        { text: "❌ لغو", callback_data: MENU_CB.SEND_CANCEL },
+      ],
+      [
+        { text: "◀️ بازگشت به منو", callback_data: MENU_CB.BACK },
+      ],
     ],
   };
 }

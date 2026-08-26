@@ -115,6 +115,10 @@ export default {
         fetchAllSubscriptions
       } = await import("./ingest/subscription");
 
+      const {
+        createTelegramBotAPI
+      } = await import("./telegram/api");
+
 
       await cleanupOldUpdates(
         env.DB,
@@ -122,7 +126,10 @@ export default {
       );
 
       console.log("[scheduled] Starting subscription fetch cycle");
-      const fetchResult = await fetchAllSubscriptions(env.DB);
+      const fetchResult = await fetchAllSubscriptions(
+        env.DB,
+        env.TELEGRAM_BOT_TOKEN ? createTelegramBotAPI(env.TELEGRAM_BOT_TOKEN) : undefined
+      );
       console.log("[scheduled] Fetch complete:", JSON.stringify(fetchResult));
 
 

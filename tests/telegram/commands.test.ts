@@ -12,13 +12,15 @@ import {
   handleStart,
   handleHelp,
   handleStatus,
+  handleListSub,
+  handleDeleteSub,
   executeCommand,
   getRegisteredCommands,
 } from "../../src/telegram/commands";
 import type { CommandContext } from "../../src/telegram/commands";
 import type { TgMessage } from "../../src/telegram/types";
 import { insertConfig } from "../../src/db/configs";
-import { insertSource } from "../../src/db/sources";
+import { insertSource, updateSource, getSourceByChatId } from "../../src/db/sources";
 
 function makeMessage(overrides: Partial<TgMessage> = {}): TgMessage {
   return {
@@ -181,7 +183,72 @@ describe("Command Handlers", () => {
       expect(commands).toContain("publish");
       expect(commands).toContain("setgithub");
       expect(commands).toContain("setoutput");
-      expect(commands.length).toBe(17);
+      expect(commands.length).toBe(20);
     });
+  });
+});
+
+async function insertTestSub(db: D1Database, chatId: number, title: string, subUrl: string) {
+  await insertSource(db, {
+    chat_id: chatId,
+    title,
+    type: "subscription",
+    enabled: 1,
+    trusted: 1,
+  });
+  await updateSource(db, chatId, {
+    sub_url: subUrl,
+    sub_status: "active",
+    auto_fetch: 1,
+  });
+}
+
+describe("/listsub + delete subscription", () => {
+  let db: D1Database;
+  let api: MockTelegramBotAPI;
+
+  beforeEach(() => {
+    db = createTestDB();
+    api = new MockTelegramBotAPI();
+  });
+
+  it("listsub shows one delete button per subscription", async () => {
+    await insertTestSub(db, 12345, "My Sub", "https://example.com/sub");
+
+    await handleListSub(makeCtx(db, api));
+
+    const msg = api.sendMessageCalls[0];
+    expect(msg.text).toContain("My Sub");
+    const kb = msg.reply_markup as { inline_keyboard: { callback_data?: string }[][] };
+    const flat = kb.inline_keyboard.flat();
+    expect(flat.some((b) => b.callback_data === "del_sub:12345")).toBe(true);
+  });
+
+  it("handleDeleteSub removes the subscription", async () => {
+    await insertTestSub(db, 777, "Temp Sub", "https://x.com/sub");
+
+    await handleDeleteSub(777, makeCtx(db, api));
+
+    expect(api.sendMessageCalls.length).toBe(1);
+    expect(api.sendMessageCalls[0].text).toContain("حذف شد");
+    expect(await getSourceByChatId(db, 777)).toBeNull();
+  });
+
+  it("handleDeleteSub reports a missing subscription", async () => {
+    await handleDeleteSub(999999, makeCtx(db, api));
+
+    expect(api.sendMessageCalls.length).toBe(1);
+    expect(api.sendMessageCalls[0].text).toContain("وجود ندارد");
+  });
+
+  it("handleDeleteSub rejects non-admin users", async () => {
+    const message = makeMessage({
+      from: { id: 999999, is_bot: false, first_name: "User" },
+    });
+
+    await handleDeleteSub(123, makeCtx(db, api, { message }));
+
+    expect(api.sendMessageCalls.length).toBe(1);
+    expect(api.sendMessageCalls[0].text).toContain("Access denied");
   });
 });

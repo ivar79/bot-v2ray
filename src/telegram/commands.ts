@@ -13,7 +13,7 @@
  */
 
 import type { TelegramBotAPI } from "./api";
-import type { TgMessage } from "./types";
+import type { TgMessage, TgInlineKeyboardButton } from "./types";
 import { getMessageText } from "./types";
 import { isAdmin } from "./auth";
 import type { D1Database } from "@cloudflare/workers-types";
@@ -23,14 +23,17 @@ import { countBatches } from "../db/batches";
 import { getAdminStateName, clearAdminState, setAdminState } from "../db/admin-states";
 import { addTrustedSource, removeTrustedSource } from "../ingest/channel";
 import { generateAllOutputs } from "../output/generator";
-import { countActiveConfigs, countConfigsByProtocol } from "../db/configs";
+import { countActiveConfigs, countConfigsByProtocol, getActiveConfigs, getRecentActiveConfigs } from "../db/configs";
 import { publishToGitHub, createPublisherConfig } from "../github/publisher";
 import { createGitHubAPI, type GitHubAPI } from "../github/api";
 import { getSetting, setSetting } from "../db/settings";
-import { publishToTelegramChannel } from "./output-publisher";
-import { buildMainMenuKeyboard, buildBackKeyboard, buildAutoFetchKeyboard, buildSubPromptKeyboard } from "./keyboard";
-import { getSourceByChatId, insertSource, updateSource } from "../db/sources";
+import { publishToTelegramChannel, sendConfigCards } from "./output-publisher";
+import { buildMainMenuKeyboard, buildBackKeyboard, buildAutoFetchKeyboard, buildSubPromptKeyboard, buildSendKeyboard, MENU_CB } from "./keyboard";
+import { getSourceByChatId, insertSource, updateSource, deleteSource } from "../db/sources";
 import { fetchAllSubscriptions } from "../ingest/subscription";
+import { applyRemarkToConfigs, DEFAULT_REMARK_TEMPLATE } from "../output/remark";
+import { formatConfigCard } from "../output/config-card";
+import type { ConfigRow } from "../db/connection";
 
 // ─── Command Context ───────────────────────────────────────
 
@@ -160,6 +163,11 @@ export async function handleHelp(ctx: CommandContext): Promise<void> {
       "⚙️ <b>Configuration</b>:",
       "/setgithub — Set GitHub repo settings",
       "/setoutput — Set Telegram output channel",
+      "/setremark — Set config name template",
+      "/setwelcome — Set welcome message",
+      "",
+      "📤 <b>Send</b>:",
+      "/send — Send configs/files to output channel",
     ].join("\n"),
       reply_markup: buildBackKeyboard(),
 parse_mode: "HTML",
@@ -798,6 +806,350 @@ export async function handleSetOutput(ctx: CommandContext): Promise<void> {
   }
 }
 
+
+// ─── /setremark ────────────────────────────────────────────
+
+/**
+ * Handle /setremark command.
+ * Sets the remark template applied to configs at send/generate time.
+ * Usage: /setremark <template>  (or tap the menu button)
+ * Placeholders: {location} {flag} {country} {protocol}
+ */
+export async function handleSetRemark(ctx: CommandContext): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = ctx.userId ?? message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⛔ Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  const text = getMessageText(message);
+  const parts = text.split(/\s+/);
+
+  // Direct template argument (only from typed command)
+  if (!ctx.isCallback && parts.length >= 2) {
+    const template = parts.slice(1).join(" ").trim();
+    if (template.length > 120) {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "⚠️ متن طولانی است (حداکثر ۱۲۰ کاراکتر).",
+        reply_markup: buildBackKeyboard(),
+      });
+      return;
+    }
+    try {
+      await setSetting(db, "remark_template", template);
+      await api.sendMessage({
+        chat_id: chatId,
+        text: [
+          "✅ <b>قالب نام ذخیره شد:</b>",
+          "",
+          "📌 " + template,
+          "",
+          "متغیرها: {location} {flag} {country} {protocol}",
+        ].join("\n"),
+        parse_mode: "HTML",
+        reply_markup: buildBackKeyboard(),
+      });
+    } catch {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "⚠️ خطا در ذخیره قالب نام.",
+        reply_markup: buildBackKeyboard(),
+      });
+    }
+    return;
+  }
+
+  // Conversation mode — prompt for the template
+  await setAdminState(db, userId, "awaiting_remark_template", { flow: "setremark" });
+  const current = await getSetting(db, "remark_template");
+  await api.sendMessage({
+    chat_id: chatId,
+    text: [
+      "🏷️ <b>قالب نام کانفیگ</b>",
+      "",
+      "قالب جدید را ارسال کنید. متغیرها:",
+      "{location} {flag} {country} {protocol}",
+      "",
+      current ? "قالب فعلی: <code>" + current + "</code>" : "قالبی تنظیم نشده است.",
+    ].join("\n"),
+    parse_mode: "HTML",
+    reply_markup: buildSubPromptKeyboard(),
+  });
+}
+
+// ─── /setwelcome ───────────────────────────────────────────
+
+/**
+ * Handle /setwelcome command.
+ * Sets the welcome message sent when new members join a group.
+ * Usage: /setwelcome <text>  (or tap the menu button)
+ * Placeholders: {name} {group}
+ */
+export async function handleSetWelcome(ctx: CommandContext): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = ctx.userId ?? message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⛔ Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  const text = getMessageText(message);
+  const parts = text.split(/\s+/);
+
+  // Direct text argument (only from typed command)
+  if (!ctx.isCallback && parts.length >= 2) {
+    const welcome = parts.slice(1).join(" ").trim();
+    try {
+      await setSetting(db, "welcome_message", welcome);
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "✅ پیام خوش‌آمد ذخیره شد.\n\nپیش‌نمایش:\n" + welcome,
+        parse_mode: "HTML",
+        reply_markup: buildBackKeyboard(),
+      });
+    } catch {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "⚠️ خطا در ذخیره پیام خوش‌آمد.",
+        reply_markup: buildBackKeyboard(),
+      });
+    }
+    return;
+  }
+
+  // Conversation mode — prompt for the text
+  await setAdminState(db, userId, "awaiting_welcome_text", { flow: "setwelcome" });
+  const current = await getSetting(db, "welcome_message");
+  await api.sendMessage({
+    chat_id: chatId,
+    text: [
+      "👋 <b>پیام خوش‌آمد</b>",
+      "",
+      "متن جدید را ارسال کنید. متغیرها:",
+      "{name} {group}",
+      "",
+      current ? "متن فعلی:" : "متن‌ای تنظیم نشده است.",
+      current ? current : "",
+    ].join("\n"),
+    parse_mode: "HTML",
+    reply_markup: buildSubPromptKeyboard(),
+  });
+}
+
+// ─── /send ─────────────────────────────────────────────────
+
+/**
+ * Handle /send command.
+ * Shows options for sending configs to the configured output channel:
+ * - files (all.txt, per-protocol, per-operator) as documents
+ * - recent configs as individual cards
+ * - all configs as batch cards
+ * Usage: /send [files|recent|all]
+ */
+export async function handleSendCommand(ctx: CommandContext): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = ctx.userId ?? message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⛔ Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  const text = getMessageText(message);
+  const parts = text.split(/\s+/);
+  if (!ctx.isCallback && parts.length >= 2) {
+    const action = parts[1].toLowerCase();
+    if (["files", "recent", "all"].includes(action)) {
+      await handleSendAction(action, ctx);
+      return;
+    }
+  }
+
+  await api.sendMessage({
+    chat_id: chatId,
+    text: "📤 <b>ارسال به کانال خروجی</b>\n\nگزینه مورد نظر را انتخاب کنید:",
+    parse_mode: "HTML",
+    reply_markup: buildSendKeyboard(),
+  });
+}
+
+/**
+ * Handle send:* callback actions from the send menu.
+ * Actions: files, recent, all, cancel
+ */
+export async function handleSendAction(action: string, ctx: CommandContext): Promise<void> {
+  const { db, api, message } = ctx;
+  const chatId = message.chat.id;
+
+  switch (action) {
+    case "files": {
+      await api.sendMessage({ chat_id: chatId, text: "⏳ در حال ساخت و ارسال فایل‌ها...", parse_mode: "HTML" });
+      try {
+        const manifest = await generateAllOutputs(db);
+        const result = await publishToTelegramChannel(db, api, manifest);
+        await api.sendMessage({
+          chat_id: chatId,
+          text: result.error
+            ? "⚠️ " + result.error
+            : [
+                "✅ <b>ارسال فایل‌ها انجام شد</b>",
+                "",
+                "📄 ارسال‌شده: " + result.sentCount,
+                "⏭️ ردشده (خالی/بزرگ): " + result.skippedCount,
+                "❌ ناموفق: " + result.failedCount,
+              ].join("\n"),
+          parse_mode: "HTML",
+          reply_markup: buildBackKeyboard(),
+        });
+      } catch {
+        await api.sendMessage({
+          chat_id: chatId,
+          text: "⚠️ خطا در ساخت یا ارسال فایل‌ها.",
+          reply_markup: buildBackKeyboard(),
+        });
+      }
+      break;
+    }
+
+    case "recent": {
+      const configs = await getRecentActiveConfigs(db, 10);
+      if (configs.length === 0) {
+        await api.sendMessage({ chat_id: chatId, text: "📭 کانفیگ فعالی وجود ندارد.", reply_markup: buildBackKeyboard() });
+        break;
+      }
+      await sendConfigsAsCards(db, api, configs, chatId);
+      break;
+    }
+
+    case "all": {
+      const configs = await getActiveConfigs(db);
+      if (configs.length === 0) {
+        await api.sendMessage({ chat_id: chatId, text: "📭 کانفیگ فعالی وجود ندارد.", reply_markup: buildBackKeyboard() });
+        break;
+      }
+      await sendConfigsAsCards(db, api, configs, chatId);
+      break;
+    }
+
+    case "cancel":
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "❌ ارسال لغو شد.",
+        reply_markup: buildBackKeyboard(),
+      });
+      break;
+
+    default:
+      await api.sendMessage({ chat_id: chatId, text: "❓ گزینه ناشناخته.", reply_markup: buildBackKeyboard() });
+      break;
+  }
+}
+
+/**
+ * Send configs to the output channel as formatted cards.
+ * The remark template (if configured) is applied to every URI first,
+ * so published configs carry our own channel name.
+ */
+async function sendConfigsAsCards(
+  db: D1Database,
+  api: TelegramBotAPI,
+  configs: ConfigRow[],
+  chatId: number
+): Promise<void> {
+  const template = (await getSetting(db, "remark_template")) ?? DEFAULT_REMARK_TEMPLATE;
+  const uris = applyRemarkToConfigs(configs, template);
+  const cards = configs.map((c, i) => formatConfigCard({ ...c, raw: uris[i] }));
+
+  const result = await sendConfigCards(db, api, cards);
+  await api.sendMessage({
+    chat_id: chatId,
+    text: result.error
+      ? "⚠️ " + result.error
+      : [
+          "✅ <b>ارسال کانفیگ‌ها انجام شد</b>",
+          "",
+          "📤 ارسال‌شده: " + result.sentCount,
+          "❌ ناموفق: " + result.failedCount,
+          "",
+          "📌 نام کانفیگ‌ها با قالب تنظیم‌شده بازنویسی شد.",
+        ].join("\n"),
+    parse_mode: "HTML",
+    reply_markup: buildBackKeyboard(),
+  });
+}
+
+// ─── /delsub (callback) ──────────────────────────────────
+
+/**
+ * Handle del_sub:<chat_id> callback — single-click subscription delete.
+ * Only deletes subscription sources (rows with sub_url); trusted channel
+ * sources are managed via /removesource.
+ */
+export async function handleDeleteSub(
+  subChatId: number,
+  ctx: CommandContext
+): Promise<void> {
+  const { db, api, message, adminUserIds } = ctx;
+  const chatId = message.chat.id;
+  const userId = ctx.userId ?? message.from?.id;
+
+  if (!userId || !isAdmin(userId, adminUserIds)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⛔ Access denied.\nThis bot is for authorized administrators only.",
+    });
+    return;
+  }
+
+  try {
+    const src = await getSourceByChatId(db, subChatId);
+    if (!src || !src.sub_url) {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: "❓ این اشتراک دیگر وجود ندارد.\nبرای مشاهده لیست، /menu بزنید.",
+        reply_markup: buildBackKeyboard(),
+      });
+      return;
+    }
+
+    const title = src.title || src.sub_url || "Sub";
+    await deleteSource(db, subChatId);
+
+    await api.sendMessage({
+      chat_id: chatId,
+      text: [
+        "🗑️ <b>اشتراک حذف شد</b>",
+        "",
+        "📌 " + title,
+      ].join("\n"),
+      parse_mode: "HTML",
+      reply_markup: buildBackKeyboard(),
+    });
+  } catch {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⚠️ خطا در حذف اشتراک. لطفاً دوباره تلاش کنید.",
+      reply_markup: buildBackKeyboard(),
+    });
+  }
+}
+
 // ─── Command Registry ──────────────────────────────────────
 
 // ─── Menu Action Dispatcher ────────────────────────────────
@@ -830,6 +1182,15 @@ export async function handleMenuAction(
       return true;
     case "autofetch":
       await handleAutoFetch(ctx);
+      return true;
+    case "send":
+      await handleSendCommand(ctx);
+      return true;
+    case "setremark":
+      await handleSetRemark(ctx);
+      return true;
+    case "setwelcome":
+      await handleSetWelcome(ctx);
       return true;
     default:
       return false;
@@ -1046,12 +1407,21 @@ export async function handleListSub(ctx: CommandContext): Promise<void> {
     }
 
     lines.push("\uD83D\uDCCF \u06A9\u0644: " + subs.length);
+    lines.push("");
+    lines.push("\uD83D\uDDD1\uFE0F \u0628\u0631\u0627\u06CC \u062D\u0630\u0641 \u06CC\u06A9 \u0627\u0634\u062A\u0631\u0627\u06A9\u060C \u0631\u0648\u06CC \u062F\u06A9\u0645\u0647 \u0622\u0646 \u0628\u0632\u0646\u06CC\u062F:");
+
+    // One delete button per subscription (single-click delete)
+    const kbRows: TgInlineKeyboardButton[][] = subs.map((sub) => {
+      const btnTitle = sub.title || sub.sub_url?.substring(0, 25) || "Sub";
+      return [{ text: "\uD83D\uDDD1\uFE0F " + btnTitle, callback_data: "del_sub:" + sub.chat_id }];
+    });
+    kbRows.push([{ text: "\u25C0\uFE0F \u0628\u0627\u0632\u06AF\u0634\u062A \u0628\u0647 \u0645\u0646\u0648", callback_data: MENU_CB.BACK }]);
 
     await api.sendMessage({
       chat_id: chatId,
       text: lines.join("\n"),
       parse_mode: "HTML",
-      reply_markup: buildBackKeyboard(),
+      reply_markup: { inline_keyboard: kbRows },
     });
   } catch {
     await api.sendMessage({
@@ -1100,6 +1470,19 @@ export async function handleFetchNow(ctx: CommandContext): Promise<void> {
 
     if (result.skipCount > 0) {
       lines.push("\u23F8\uFE0F \u0631\u062E\u0634\u062F\u0647: " + result.skipCount);
+    }
+    if (result.errors && result.errors.length > 0) {
+      lines.push("");
+      lines.push("💡 <b>دلیل شکست:</b>");
+      for (const err of result.errors.slice(0, 5)) {
+        lines.push("  • " + err);
+      }
+    }
+    if (result.published && result.published.published) {
+      lines.push("");
+      if (result.published.sentCount > 0) {
+        lines.push("📤 " + result.published.sentCount + " کانفیگ جدید به کانال خروجی ارسال شد.");
+      }
     }
 
     await api.sendMessage({
@@ -1263,6 +1646,9 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   listsub: handleListSub,
   fetch: handleFetchNow,
   autofetch: handleAutoFetch,
+  send: handleSendCommand,
+  setremark: handleSetRemark,
+  setwelcome: handleSetWelcome,
 };
 
 /**

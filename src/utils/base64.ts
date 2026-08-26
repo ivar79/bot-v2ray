@@ -87,3 +87,11 @@ export function utf8ToBase64(text: string): string {
   }
   return btoa(binary);
 }
+
+// ─── Backwards-compatible Aliases ──────────────────────────
+
+/** Alias for utf8ToBase64 — kept for existing parser/test call sites. */
+export const encodeBase64 = utf8ToBase64;
+
+/** Alias for tryDecodeBase64 — tolerant decode returning null on failure. */
+export const decodeBase64 = tryDecodeBase64;
