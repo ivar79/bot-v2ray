@@ -1,78 +1,89 @@
 /**
- * Base64 Utilities — UTF-8 safe encode/decode
+ * Base64 Utilities
  *
- * Standard base64 and base64url encoding/decoding with full UTF-8 support.
- * Used primarily by VMess (JSON payload) and Shadowsocks (method:password).
+ * Tolerant base64 decoding for real-world subscription payloads:
+ * - Standard and URL-safe alphabets (-, _)
+ * - Whitespace / newlines anywhere in the input
+ * - Missing or incorrect padding
+ * - UTF-8 safe encode/decode (for vmess JSON remarks)
  */
+
+// ─── Normalization ─────────────────────────────────────────
 
 /**
- * Decode a base64 string to UTF-8 text.
- * Handles both standard base64 and base64url encodings.
- * Returns null if the input is not valid base64.
+ * Normalize a base64 string so it can be decoded by atob():
+ * 1. Strip all whitespace/newlines/tabs
+ * 2. Convert URL-safe alphabet to standard
+ * 3. Fix missing/incorrect padding
+ *
+ * Returns null if the input cannot be a valid base64 payload
+ * (e.g. length % 4 === 1 after cleanup).
  */
-export function decodeBase64(input: string): string | null {
-  try {
-    // Normalize base64url to standard base64
-    let b64 = input.replace(/-/g, "+").replace(/_/g, "/");
+export function normalizeBase64(input: string): string | null {
+  if (!input) return null;
+  // Strip all whitespace characters (newlines, spaces, tabs, CR)
+  let b64 = input.replace(/\s+/g, "");
+  if (!b64) return null;
 
-    // Add padding if missing
-    const pad = b64.length % 4;
-    if (pad === 2) b64 += "==";
-    else if (pad === 3) b64 += "=";
-    else if (pad !== 0) return null;
+  // URL-safe → standard alphabet
+  b64 = b64.replace(/-/g, "+").replace(/_/g, "/");
 
-    // Use atob (available in Workers runtime)
-    const binary = atob(b64);
-    // Convert binary string to UTF-8
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return new TextDecoder("utf-8").decode(bytes);
-  } catch {
-    return null;
-  }
+  // Remove any existing padding first, then re-pad correctly
+  b64 = b64.replace(/=+$/, "");
+
+  const rem = b64.length % 4;
+  if (rem === 1) return null; // Impossible base64 length
+  if (rem === 2) b64 += "==";
+  else if (rem === 3) b64 += "=";
+
+  return b64;
 }
 
 /**
- * Decode a base64 string to raw bytes.
- * Returns null if the input is not valid base64.
+ * Attempt to decode a possibly-malformed base64 payload.
+ * Tries multiple strategies in order:
+ * 1. Normalized (whitespace-stripped, URL-safe converted, re-padded)
+ * 2. Raw trimmed input as-is (already valid standard base64)
+ *
+ * Returns the decoded UTF-8 text, or null if all attempts fail.
  */
-export function decodeBase64Bytes(input: string): Uint8Array | null {
-  try {
-    let b64 = input.replace(/-/g, "+").replace(/_/g, "/");
-    const pad = b64.length % 4;
-    if (pad === 2) b64 += "==";
-    else if (pad === 3) b64 += "=";
-    else if (pad !== 0) return null;
+export function tryDecodeBase64(input: string): string | null {
+  if (!input || !input.trim()) return null;
 
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
+  const candidates = new Set<string>();
+  const normalized = normalizeBase64(input);
+  if (normalized) candidates.add(normalized);
+  candidates.add(input.trim());
+
+  for (const candidate of candidates) {
+    try {
+      const binary = atob(candidate);
+      if (!binary) continue;
+      return binaryToUtf8(binary);
+    } catch {
+      // Try next strategy
     }
-    return bytes;
-  } catch {
-    return null;
   }
+  return null;
 }
 
-/**
- * Encode a UTF-8 string to standard base64.
- */
-export function encodeBase64(input: string): string {
-  const bytes = new TextEncoder().encode(input);
+// ─── UTF-8 Safe Conversions ────────────────────────────────
+
+/** Decode an atob() binary string (latin1) into proper UTF-8 text. */
+export function binaryToUtf8(binary: string): string {
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/** Encode a UTF-8 string to base64 (safe for non-ASCII content like Persian remarks). */
+export function utf8ToBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
   let binary = "";
-  for (const b of bytes) {
-    binary += String.fromCharCode(b);
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
-}
-
-/**
- * Check if a string looks like valid base64 (loose check).
- */
-export function isLikelyBase64(input: string): boolean {
-  return /^[A-Za-z0-9+/=_\-]+$/.test(input) && input.length % 4 === 0 || 
-    /^[A-Za-z0-9+/=_\-]+$/.test(input);
 }

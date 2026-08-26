@@ -15,6 +15,7 @@ import type { TgMessage, TgInlineKeyboardMarkup } from "./types";
 import { getMessageText } from "./types";
 import { getAdminState, setAdminState, clearAdminState } from "../db/admin-states";
 import { getSourceByChatId, insertSource, updateSource } from "../db/sources";
+import { setSetting } from "../db/settings";
 import { buildSubPromptKeyboard, buildBackKeyboard } from "./keyboard";
 
 // ─── Types ─────────────────────────────────
@@ -58,6 +59,8 @@ interface ConversationState {
 const CONVERSATION_STATES: Record<string, ConversationState> = {
   awaiting_sub_url: { handleInput: handleSubUrlInput },
   awaiting_sub_title: { handleInput: handleSubTitleInput },
+  awaiting_remark_template: { handleInput: handleRemarkTemplateInput },
+  awaiting_welcome_text: { handleInput: handleWelcomeTextInput },
 };
 
 // ─── State Timeout ────────────────────────────────
@@ -102,9 +105,15 @@ export async function dispatchConversationState(
     return false;
   }
 
-  const context = state.context
-    ? (JSON.parse(state.context) as Record<string, unknown>)
-    : null;
+  let context: Record<string, unknown> | null = null;
+  try {
+    context = state.context
+      ? (JSON.parse(state.context) as Record<string, unknown>)
+      : null;
+  } catch {
+    // Corrupted context — continue with null so the flow can recover
+    console.error("[conversations] corrupted state context: userId=" + userId + " state=" + state.state);
+  }
   const text = getMessageText(message).trim();
 
   const result = await handler.handleInput(text, {
@@ -221,5 +230,60 @@ async function handleSubTitleInput(
     };
   } catch {
     return { action: "complete", reply: "\u26a0\ufe0f \u062e\u0637\u0627 \u062f\u0631 \u0627\u0636\u0627\u0641\u0647.", replyMarkup: buildBackKeyboard() };
+  }
+}
+
+// ─── Remark & Welcome States ──────────────────────────────
+
+/**
+ * Handle user input while in "awaiting_remark_template" state.
+ * Saves the config remark template used when publishing configs.
+ */
+async function handleRemarkTemplateInput(
+  text: string, ctx: ConversationCtx
+): Promise<StateResult> {
+  if (!text || text === "/cancel") {
+    return { action: "complete", reply: "❌ لغو شد.", replyMarkup: buildBackKeyboard() };
+  }
+  if (text.length > 120) {
+    return { action: "retry", reply: "⚠️ متن طولانی است (حداکثر ۱۲۰ کاراکتر). دوباره ارسال کنید:", replyMarkup: buildSubPromptKeyboard() };
+  }
+  try {
+    await setSetting(ctx.db, "remark_template", text);
+    return {
+      action: "complete",
+      reply: [
+        "✅ قالب نام کانفیگ ذخیره شد:",
+        "",
+        "📌 " + text,
+        "",
+        "متغیرها: {location} {flag} {country} {protocol}",
+      ].join("\n"),
+      replyMarkup: buildBackKeyboard(),
+    };
+  } catch {
+    return { action: "complete", reply: "⚠️ خطا در ذخیره قالب نام.", replyMarkup: buildBackKeyboard() };
+  }
+}
+
+/**
+ * Handle user input while in "awaiting_welcome_text" state.
+ * Saves the group welcome message template.
+ */
+async function handleWelcomeTextInput(
+  text: string, ctx: ConversationCtx
+): Promise<StateResult> {
+  if (!text || text === "/cancel") {
+    return { action: "complete", reply: "❌ لغو شد.", replyMarkup: buildBackKeyboard() };
+  }
+  try {
+    await setSetting(ctx.db, "welcome_message", text);
+    return {
+      action: "complete",
+      reply: "✅ پیام خوش‌آمد ذخیره شد.\n\nپیش‌نمایش:\n" + text,
+      replyMarkup: buildBackKeyboard(),
+    };
+  } catch {
+    return { action: "complete", reply: "⚠️ خطا در ذخیره پیام خوش‌آمد.", replyMarkup: buildBackKeyboard() };
   }
 }

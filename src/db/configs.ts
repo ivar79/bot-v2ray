@@ -157,6 +157,57 @@ export async function getActiveConfigsByProtocol(
   return result.results ?? [];
 }
 
+/**
+ * Get the most recently seen valid, active configs.
+ * Ordered by last_seen DESC (newest first).
+ */
+export async function getRecentActiveConfigs(
+  db: D1Database,
+  limit: number
+): Promise<ConfigRow[]> {
+  const result = await db
+    .prepare(
+      "SELECT * FROM configs WHERE is_valid = 1 AND active = 1 ORDER BY last_seen DESC, id DESC LIMIT ?"
+    )
+    .bind(limit)
+    .all<ConfigRow>();
+  return result.results ?? [];
+}
+
+/**
+ * Get all distinct country codes of valid, active configs (with counts).
+ */
+export async function countActiveConfigsByCountry(
+  db: D1Database
+): Promise<Record<string, number>> {
+  const result = await db
+    .prepare(
+      "SELECT location_country_code AS cc, COUNT(*) AS cnt FROM configs WHERE is_valid = 1 AND active = 1 AND location_country_code IS NOT NULL GROUP BY location_country_code"
+    )
+    .all<{ cc: string; cnt: number }>();
+  const counts: Record<string, number> = {};
+  for (const row of result.results ?? []) {
+    counts[row.cc] = row.cnt;
+  }
+  return counts;
+}
+
+/**
+ * Get valid, active configs filtered by country code.
+ */
+export async function getActiveConfigsByCountry(
+  db: D1Database,
+  countryCode: string
+): Promise<ConfigRow[]> {
+  const result = await db
+    .prepare(
+      "SELECT * FROM configs WHERE is_valid = 1 AND active = 1 AND location_country_code = ? ORDER BY config_hash"
+    )
+    .bind(countryCode.toUpperCase())
+    .all<ConfigRow>();
+  return result.results ?? [];
+}
+
 /** Count all configs. */
 export async function countConfigs(db: D1Database): Promise<number> {
   const row = await db

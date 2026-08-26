@@ -11,14 +11,15 @@ import type { D1Database } from "@cloudflare/workers-types";
 import type { TgMessage, TgChannelPost, TgCallbackQuery } from "./types";
 import { getMessageText, isPrivateChat, isChannelChat } from "./types";
 import type { TelegramBotAPI } from "./api";
-import { executeCommand, handleMenuAction, type CommandContext } from "./commands";
+import { executeCommand, handleMenuAction, handleSendCommand, handleSetRemark, handleSetWelcome, handleSendAction, type CommandContext } from "./commands";
 import { isAdmin } from "./auth";
 import { handleTextUpload, handleDocumentUpload, handleOperatorSelection } from "../ingest/admin";
 import { handleChannelPost } from "../ingest/channel";
 import { dispatchConversationState } from "./conversations";
 import { clearAdminState } from "../db/admin-states";
-import { buildAutoFetchKeyboard } from "./keyboard";
+import { buildAutoFetchKeyboard, buildBackKeyboard } from "./keyboard";
 import { getAllSources, updateSource } from "../db/sources";
+import { getSetting } from "../db/settings";
 import type { GitHubAPI } from "../github/api";
 
 // ─── Message Processing ────────────────────────────────────
@@ -43,6 +44,14 @@ export async function processMessage(
   const userId = message.from?.id;
   const chatId = message.chat.id;
   console.log("[routing] message received: userId=" + userId + " chatId=" + chatId + " text=" + (text || "(empty)").substring(0, 80));
+
+  // New group members joined → send welcome message
+  if (message.new_chat_members && message.new_chat_members.length > 0) {
+    if (!message.new_chat_members.some((m) => m.is_bot)) {
+      await handleNewMemberWelcome(message, db, api);
+      return;
+    }
+  }
 
   // Check for commands
   if (text.startsWith("/")) {
@@ -124,15 +133,24 @@ export async function processCallbackQuery(
   // Handle menu button presses (menu:action)
   if (data.startsWith("menu:")) {
     const action = data.slice(5); // Remove "menu:" prefix
+    if (!callbackQuery.message) {
+      console.error("[routing] menu callback without message: data=" + data + " userId=" + userId);
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
     const ctx = {
       db,
       api,
       adminUserIds,
-      message: callbackQuery.message!,
+      message: callbackQuery.message,
       userId: callbackQuery.from.id,
       isCallback: true,
     };
-    await handleMenuAction(action, ctx);
+    try {
+      await handleMenuAction(action, ctx);
+    } catch (e) {
+      console.error("[routing] handleMenuAction failed: action=" + action + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
@@ -155,17 +173,45 @@ export async function processCallbackQuery(
 
   // Handle autofetch settings callbacks
   if (data.startsWith("autofetch:")) {
+    if (!callbackQuery.message) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
     const afAction = data.slice(10);
-    const ctx = { db, api, adminUserIds, message: callbackQuery.message!, userId: callbackQuery.from.id, isCallback: true };
-    await handleAutoFetchAction(afAction, ctx);
+    const ctx = { db, api, adminUserIds, message: callbackQuery.message, userId: callbackQuery.from.id, isCallback: true };
+    try {
+      await handleAutoFetchAction(afAction, ctx);
+    } catch (e) {
+      console.error("[routing] autofetch action failed: action=" + afAction + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
   // Handle sub cancel callback
   if (data === "sub:cancel") {
-    await clearAdminState(db, callbackQuery.from.id);
-    const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
-    await api.sendMessage({ chat_id: chatId, text: "❌ عملیات لغو شد." });
+    try {
+      await clearAdminState(db, callbackQuery.from.id);
+      const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
+      await api.sendMessage({ chat_id: chatId, text: "❌ عملیات لغو شد." });
+    } catch (e) {
+      console.error("[routing] sub:cancel failed: userId=" + callbackQuery.from.id + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
+    await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+    return;
+  }
+  // Handle send-to-channel callbacks
+  if (data.startsWith("send:")) {
+    if (!callbackQuery.message) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
+    const sendAction = data.slice(5);
+    const ctx = { db, api, adminUserIds, message: callbackQuery.message, userId: callbackQuery.from.id, isCallback: true };
+    try {
+      await handleSendAction(sendAction, ctx);
+    } catch (e) {
+      console.error("[routing] send action failed: action=" + sendAction + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
@@ -197,6 +243,40 @@ async function handleAutoFetchAction(action: string, ctx: CommandContext): Promi
   }
 }
 
+
+// ─── New Member Welcome ────────────────────────────────────
+
+/**
+ * Send a welcome message when new members join a group.
+ * The welcome text is configurable via the "welcome_message" setting.
+ * Placeholders: {name} — member first name, {group} — chat title.
+ */
+async function handleNewMemberWelcome(
+  message: TgMessage,
+  db: D1Database,
+  api: TelegramBotAPI
+): Promise<void> {
+  try {
+    const template =
+      (await getSetting(db, "welcome_message")) ??
+      "👋 خوش آمدی <b>{name}</b> به <b>{group}</b>!\n\nامیدواریم لحظات خوبی داشته باشی 🎉";
+
+    for (const member of message.new_chat_members ?? []) {
+      if (member.is_bot) continue;
+      const text = template
+        .replace(/\{name\}/g, escapeHtml(member.first_name || "دوست عزیز"))
+        .replace(/\{group\}/g, escapeHtml(message.chat.title || "گروه"));
+      await api.sendMessage({ chat_id: message.chat.id, text, parse_mode: "HTML" });
+    }
+  } catch (e) {
+    console.error("[routing] welcome failed: chatId=" + message.chat.id + " error=" + (e instanceof Error ? e.message : String(e)));
+  }
+}
+
+/** Escape HTML special characters in user-provided names. */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 // ─── Command Parsing ───────────────────────────────────────
 

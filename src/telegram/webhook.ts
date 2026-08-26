@@ -108,9 +108,10 @@ export async function handleWebhookRequest(
   try {
     const api = apiOverride ?? createTelegramBotAPI(env.TELEGRAM_BOT_TOKEN);
     await routeUpdate(update, env.DB, api, env.ADMIN_USER_IDS, env.GITHUB_TOKEN, undefined);
-  } catch {
-    // Don't expose internal errors to Telegram
-    // Still return 200 to prevent retries for processing errors
+  } catch (e) {
+    // Log the error so it's visible via `wrangler tail` — but don't expose
+    // internal errors to Telegram. Still return 200 to prevent retries.
+    console.error("[webhook] routeUpdate failed: update_id=" + update.update_id + " error=" + (e instanceof Error ? (e.stack ?? e.message) : String(e)));
   }
 
   // ── Step 5: Mark as processed ──

@@ -9,6 +9,7 @@ import type { SourceRow } from "../db/connection";
 import { getEnabledSubscriptions, updateSourceFetchResult } from "../db/sources";
 import { createBatch, completeBatchRun, failBatchRun } from "./batch";
 import { runPipeline } from "./pipeline";
+import { tryDecodeBase64 } from "../utils/base64";
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
@@ -87,14 +88,10 @@ function hasProtocolURIs(text: string): boolean {
 export function detectFormat(content: string): SubFormat {
   if (!content || !content.trim()) return "unknown";
   const trimmed = content.trim();
-  try {
-    let b64 = trimmed;
-    const pad = b64.length % 4;
-    if (pad === 2) b64 += "==";
-    else if (pad === 3) b64 += "=";
-    const decoded = atob(b64);
-    if (decoded && hasProtocolURIs(decoded)) return "base64";
-  } catch { /* not base64 */ }
+  // Tolerant base64 decode: handles whitespace/newlines, URL-safe alphabet,
+  // and missing/incorrect padding — common in real-world subscription payloads.
+  const decoded = tryDecodeBase64(trimmed);
+  if (decoded && hasProtocolURIs(decoded)) return "base64";
   if (hasProtocolURIs(trimmed)) return "plain";
   return "unknown";
 }
@@ -132,14 +129,9 @@ export function extractConfigs(content: string, format: SubFormat): string[] {
   if (!content) return [];
   let text = content;
   if (format === "base64") {
-    try {
-      let b64 = content.trim();
-      const pad = b64.length % 4;
-      if (pad === 2) b64 += "==";
-      else if (pad === 3) b64 += "=";
-      const decoded = atob(b64);
-      if (decoded) text = decoded;
-    } catch { return []; }
+    const decoded = tryDecodeBase64(content);
+    if (decoded === null) return [];
+    text = decoded;
   }
   const matches = extractConfigURIs(text);
   if (!matches) return [];

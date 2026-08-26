@@ -42,6 +42,7 @@ export interface TgMessage {
   };
   caption?: string;
   reply_to_message?: TgMessage;
+  new_chat_members?: TgUser[];
 }
 
 /** Telegram channel post (same structure as Message). */

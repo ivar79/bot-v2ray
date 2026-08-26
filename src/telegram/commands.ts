@@ -274,18 +274,29 @@ export async function handleCancel(ctx: CommandContext): Promise<void> {
   }
 
   const { getAdminState } = await import("../db/admin-states");
-  const state = await getAdminState(db, userId);
-  
-  if (state?.state !== "idle") {
+  let state: Awaited<ReturnType<typeof getAdminState>> = null;
+  try {
+    state = await getAdminState(db, userId);
+  } catch {
+    // If state lookup fails, clear anyway to guarantee cancellation
     await clearAdminState(db, userId);
     await api.sendMessage({
       chat_id: chatId,
-      text: "❌ Upload cancelled.",
+      text: "❌ عملیات لغو شد.",
+    });
+    return;
+  }
+
+  if (state && state.state !== "idle") {
+    await clearAdminState(db, userId);
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "❌ عملیات لغو شد.",
     });
   } else {
     await api.sendMessage({
       chat_id: chatId,
-      text: "Nothing to cancel.",
+      text: "چیزی برای لغو وجود ندارد.",
     });
   }
 }
