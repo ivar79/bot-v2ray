@@ -11,15 +11,16 @@ import type { D1Database } from "@cloudflare/workers-types";
 import type { TgMessage, TgChannelPost, TgCallbackQuery } from "./types";
 import { getMessageText, isPrivateChat, isChannelChat } from "./types";
 import type { TelegramBotAPI } from "./api";
-import { executeCommand, handleMenuAction, type CommandContext } from "./commands";
+import { executeCommand, handleMenuAction, handleSendAction, handleDeleteSub, type CommandContext } from "./commands";
 import { cancelFetch, getActiveFetch } from "../ingest/subscription";
 import { isAdmin } from "./auth";
 import { handleTextUpload, handleDocumentUpload, handleOperatorSelection } from "../ingest/admin";
 import { handleChannelPost } from "../ingest/channel";
 import { dispatchConversationState } from "./conversations";
 import { clearAdminState } from "../db/admin-states";
-import { buildAutoFetchKeyboard, MENU_CB } from "./keyboard";
+import { buildAutoFetchKeyboard, buildMainMenuKeyboard, MENU_CB } from "./keyboard";
 import { getAllSources, updateSource } from "../db/sources";
+import { getSetting } from "../db/settings";
 import type { GitHubAPI } from "../github/api";
 
 // ─── Message Processing ────────────────────────────────────
@@ -44,6 +45,14 @@ export async function processMessage(
   const userId = message.from?.id;
   const chatId = message.chat.id;
   console.log("[routing] message received: userId=" + userId + " chatId=" + chatId + " text=" + (text || "(empty)").substring(0, 80));
+
+  // New group members joined → send welcome message
+  if (message.new_chat_members && message.new_chat_members.length > 0) {
+    if (!message.new_chat_members.some((m) => m.is_bot)) {
+      await handleNewMemberWelcome(message, db, api);
+      return;
+    }
+  }
 
   // Check for commands
   if (text.startsWith("/")) {
@@ -122,6 +131,14 @@ export async function processCallbackQuery(
 
   if (!data) return;
 
+  // Any button press exits an active conversation flow —
+  // this makes the cancel/back buttons work from anywhere.
+  try {
+    await clearAdminState(db, userId);
+  } catch {
+    // Best-effort: conversation state cleanup must never break routing
+  }
+
   // Handle cancellation of a running subscription fetch.
   if (data.startsWith(MENU_CB.FETCH_CANCEL_PREFIX) || data.startsWith("fetch:cancel:")) {
     const prefix = data.startsWith(MENU_CB.FETCH_CANCEL_PREFIX)
@@ -141,11 +158,16 @@ export async function processCallbackQuery(
   // Handle menu button presses (menu:action)
   if (data.startsWith("menu:")) {
     const action = data.slice(5); // Remove "menu:" prefix
+    if (!callbackQuery.message) {
+      console.error("[routing] menu callback without message: data=" + data + " userId=" + userId);
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
     if (action === "fetch") {
-      const activeFlowId = await getActiveFetch(userId, callbackQuery.message?.chat?.id ?? userId, db);
+      const activeFlowId = await getActiveFetch(userId, callbackQuery.message.chat.id, db);
       if (activeFlowId) {
         await api.sendMessage({
-          chat_id: callbackQuery.message?.chat?.id ?? userId,
+          chat_id: callbackQuery.message.chat.id,
           text: "⏳ یک دریافت دیگر برای شما در حال اجراست. برای لغو، دکمهٔ «لغو دریافت» همان پیام را بزنید.",
         });
         await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "دریافت از قبل در حال اجراست." });
@@ -154,19 +176,28 @@ export async function processCallbackQuery(
     }
     const isFetchCallback = data === "menu:fetch";
     if (isFetchCallback) {
-      console.log("CALLBACK_FETCH_RECEIVED callback_id=" + callbackQuery.id + " user_id=" + callbackQuery.from.id + " chat_id=" + (callbackQuery.message?.chat?.id ?? "unavailable"));
+      console.log("CALLBACK_FETCH_RECEIVED callback_id=" + callbackQuery.id + " user_id=" + callbackQuery.from.id + " chat_id=" + callbackQuery.message.chat.id);
     }
     const ctx = {
       db,
       api,
       adminUserIds,
-      message: callbackQuery.message!,
+      message: callbackQuery.message,
       userId: callbackQuery.from.id,
       isCallback: true,
     };
+    let handled = false;
     if (isFetchCallback) console.log("CALLBACK_FETCH_DISPATCH_STARTED action=fetch");
-    await handleMenuAction(action, ctx);
+    try {
+      handled = await handleMenuAction(action, ctx);
+    } catch (e) {
+      console.error("[routing] handleMenuAction failed: action=" + action + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
     if (isFetchCallback) console.log("CALLBACK_FETCH_DISPATCH_FINISHED action=fetch");
+    if (!handled) {
+      await sendStaleButtonHint(api, callbackQuery);
+      return;
+    }
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
@@ -189,34 +220,71 @@ export async function processCallbackQuery(
 
   // Handle autofetch settings callbacks
   if (data.startsWith("autofetch:")) {
+    if (!callbackQuery.message) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
     const afAction = data.slice(10);
-    const ctx = { db, api, adminUserIds, message: callbackQuery.message!, userId: callbackQuery.from.id, isCallback: true };
-    await handleAutoFetchAction(afAction, ctx);
+    const ctx = { db, api, adminUserIds, message: callbackQuery.message, userId: callbackQuery.from.id, isCallback: true };
+    try {
+      await handleAutoFetchAction(afAction, ctx);
+    } catch (e) {
+      console.error("[routing] autofetch action failed: action=" + afAction + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
   // Handle sub cancel callback
   if (data === MENU_CB.SUB_CANCEL) {
-    const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
-    if (!isAdmin(userId, adminUserIds)) {
-      await api.answerCallbackQuery({
-        callback_query_id: callbackQuery.id,
-        text: "دسترسی غیرمجاز",
-        show_alert: true,
-      });
-      return;
+    try {
+      const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
+      if (!isAdmin(userId, adminUserIds)) {
+        await api.answerCallbackQuery({
+          callback_query_id: callbackQuery.id,
+          text: "دسترسی غیرمجاز",
+          show_alert: true,
+        });
+        return;
+      }
+      await clearAdminState(db, userId);
+      await api.sendMessage({ chat_id: chatId, text: "❌ عملیات لغو شد." });
+    } catch (e) {
+      console.error("[routing] sub:cancel failed: userId=" + callbackQuery.from.id + " error=" + (e instanceof Error ? e.message : String(e)));
     }
-    await clearAdminState(db, userId);
-    await api.sendMessage({ chat_id: chatId, text: "❌ عملیات لغو شد." });
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
-  // Other callback types — acknowledge
+
+  // Unknown / stale callback data (e.g. buttons from an older deployed
+  // version, or old operator selection keys) — tell the user to open a
+  // fresh menu instead of staying silent.
+  await sendStaleButtonHint(api, callbackQuery);
+}
+
+
+/**
+ * Reply to a callback query whose data is unknown or stale (e.g. buttons
+ * from an older deployed version). Sends a visible hint to open a fresh
+ * menu and answers the callback so the loading spinner is dismissed.
+ */
+async function sendStaleButtonHint(
+  api: TelegramBotAPI,
+  callbackQuery: TgCallbackQuery
+): Promise<void> {
+  const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
+  try {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⚠️ این دکمه متعلق به نسخه قدیمی ربات است و دیگر کار نمی‌کند.\nبرای ادامه، /menu بزنید.",
+      reply_markup: buildMainMenuKeyboard(),
+    });
+  } catch {
+    // Best-effort: never break callback handling
+  }
   await api.answerCallbackQuery({
     callback_query_id: callbackQuery.id,
   });
 }
-
 
 async function handleAutoFetchAction(action: string, ctx: CommandContext): Promise<void> {
   const { db, api, message } = ctx;
@@ -239,6 +307,40 @@ async function handleAutoFetchAction(action: string, ctx: CommandContext): Promi
   }
 }
 
+
+// ─── New Member Welcome ────────────────────────────────────
+
+/**
+ * Send a welcome message when new members join a group.
+ * The welcome text is configurable via the "welcome_message" setting.
+ * Placeholders: {name} — member first name, {group} — chat title.
+ */
+async function handleNewMemberWelcome(
+  message: TgMessage,
+  db: D1Database,
+  api: TelegramBotAPI
+): Promise<void> {
+  try {
+    const template =
+      (await getSetting(db, "welcome_message")) ??
+      "👋 خوش آمدی <b>{name}</b> به <b>{group}</b>!\n\nامیدواریم لحظات خوبی داشته باشی 🎉";
+
+    for (const member of message.new_chat_members ?? []) {
+      if (member.is_bot) continue;
+      const text = template
+        .replace(/\{name\}/g, escapeHtml(member.first_name || "دوست عزیز"))
+        .replace(/\{group\}/g, escapeHtml(message.chat.title || "گروه"));
+      await api.sendMessage({ chat_id: message.chat.id, text, parse_mode: "HTML" });
+    }
+  } catch (e) {
+    console.error("[routing] welcome failed: chatId=" + message.chat.id + " error=" + (e instanceof Error ? e.message : String(e)));
+  }
+}
+
+/** Escape HTML special characters in user-provided names. */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 // ─── Command Parsing ───────────────────────────────────────
 

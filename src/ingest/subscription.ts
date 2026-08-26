@@ -17,6 +17,9 @@ import {
 } from "../db/fetch-runs";
 import { createBatch, completeBatchRun, failBatchRun } from "./batch";
 import { runPipeline } from "./pipeline";
+import { tryDecodeBase64 } from "../utils/base64";
+import type { TelegramBotAPI } from "../telegram/api";
+import { autoPublishConfigs, type AutoPublishResult } from "../telegram/output-publisher";
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
@@ -45,7 +48,8 @@ export interface SubscriptionProcessResult {
   format: SubFormat;
   error?: string;
   cancelled?: boolean;
-}
+  /** IDs of configs newly inserted during this fetch (for auto-publish). */
+  newConfigIds: number[];}
 
 export interface FetchAllResult {
   totalProcessed: number;
@@ -53,7 +57,10 @@ export interface FetchAllResult {
   failCount: number;
   skipCount: number;
   cancelled?: boolean;
-}
+  /** Per-source failure reasons (for user-facing reporting). */
+  errors: string[];
+  /** Result of auto-publishing new configs (undefined when no API client). */
+  published?: AutoPublishResult;}
 
 export interface FetchCancellation {
   isCancelled: () => boolean;
@@ -209,14 +216,10 @@ function hasProtocolURIs(text: string): boolean {
 export function detectFormat(content: string): SubFormat {
   if (!content || !content.trim()) return "unknown";
   const trimmed = content.trim();
-  try {
-    let b64 = trimmed;
-    const pad = b64.length % 4;
-    if (pad === 2) b64 += "==";
-    else if (pad === 3) b64 += "=";
-    const decoded = atob(b64);
-    if (decoded && hasProtocolURIs(decoded)) return "base64";
-  } catch { /* not base64 */ }
+  // Tolerant base64 decode: handles whitespace/newlines, URL-safe alphabet,
+  // and missing/incorrect padding — common in real-world subscription payloads.
+  const decoded = tryDecodeBase64(trimmed);
+  if (decoded && hasProtocolURIs(decoded)) return "base64";
   if (hasProtocolURIs(trimmed)) return "plain";
   return "unknown";
 }
@@ -254,14 +257,9 @@ export function extractConfigs(content: string, format: SubFormat): string[] {
   if (!content) return [];
   let text = content;
   if (format === "base64") {
-    try {
-      let b64 = content.trim();
-      const pad = b64.length % 4;
-      if (pad === 2) b64 += "==";
-      else if (pad === 3) b64 += "=";
-      const decoded = atob(b64);
-      if (decoded) text = decoded;
-    } catch { return []; }
+    const decoded = tryDecodeBase64(content);
+    if (decoded === null) return [];
+    text = decoded;
   }
   const matches = extractConfigURIs(text);
   if (!matches) return [];
@@ -291,31 +289,30 @@ export async function fetchSingleSubscription(
   const chatId = sub.chat_id;
   const title = sub.title ?? sub.sub_url ?? "Sub #" + chatId;
   const prevStatus = sub.sub_status;
-  if (cancellation?.isCancelled()) return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Cancelled", cancelled: true };
-  if (!sub.sub_url) return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "No URL" };
-  const fr = await fetchWithLimits(sub.sub_url, cancellation, abortSignal);
-  if (!fr.success || !fr.content) {
+  if (cancellation?.isCancelled()) return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Cancelled", cancelled: true, newConfigIds: [] };
+  if (!sub.sub_url) return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "No URL", newConfigIds: [] };
+  const fr = await fetchWithLimits(sub.sub_url, cancellation, abortSignal);  if (!fr.success || !fr.content) {
     if (cancellation?.isCancelled() || fr.error === "Cancelled") {
-      return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Cancelled", cancelled: true };
+      return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Cancelled", cancelled: true, newConfigIds: [] };
     }
     const fc = sub.consecutive_failures + 1;
     const ns = fc >= AUTO_DISABLE_THRESHOLD ? "inactive" : prevStatus;
     await updateSourceFetchResult(db, chatId, { status: ns, consecutive_failures: fc, last_fetch_status: "error", last_fetch_error: fr.error ?? "Unknown" });
-    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: fr.error };
+    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: fr.error, newConfigIds: [] };
   }
   const format = detectFormat(fr.content);
   if (format === "unknown") {
     const fc = sub.consecutive_failures + 1;
     const ns = fc >= AUTO_DISABLE_THRESHOLD ? "inactive" : prevStatus;
     await updateSourceFetchResult(db, chatId, { status: ns, consecutive_failures: fc, last_fetch_status: "error", last_fetch_error: "Unrecognized format", sub_type: "unknown" });
-    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Unrecognized format" };
+    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format: "unknown", error: "Unrecognized format", newConfigIds: [] };
   }
   const raw = extractConfigs(fr.content, format);
   if (raw.length === 0) {
     const fc = sub.consecutive_failures + 1;
     const ns = fc >= AUTO_DISABLE_THRESHOLD ? "inactive" : prevStatus;
     await updateSourceFetchResult(db, chatId, { status: ns, consecutive_failures: fc, last_fetch_status: "success", last_config_count: 0, sub_type: format });
-    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format, error: "No configs" };
+    return { sourceChatId: chatId, title, success: false, configCount: 0, newCount: 0, duplicateCount: 0, format, error: "No configs", newConfigIds: [] };
   }
   const limited = raw.slice(0, MAX_CONFIGS_PER_SUB);
   const batch = await createBatch({ db, sourceType: "subscription", sourceChatId: chatId, operator: "unknown" });
@@ -324,16 +321,20 @@ export async function fetchSingleSubscription(
     const result = await runPipeline(limited.join(nl), { db, batchId: batch.batchId, sourceType: "subscription", sourceChatId: chatId });
     await completeBatchRun(db, batch.collectionRunId, result);
     await updateSourceFetchResult(db, chatId, { status: "active", consecutive_failures: 0, last_fetch_status: "success", last_config_count: limited.length, sub_type: format });
-    return { sourceChatId: chatId, title, success: true, configCount: limited.length, newCount: result.newCount, duplicateCount: result.duplicateCount, format };
+    const newConfigIds = result.configs
+      .filter((c) => c.isNew && c.configId !== null)
+      .map((c) => c.configId as number);
+    return { sourceChatId: chatId, title, success: true, configCount: limited.length, newCount: result.newCount, duplicateCount: result.duplicateCount, format, newConfigIds };
   } catch (e) {
     await failBatchRun(db, batch.collectionRunId, "Pipeline error");
     await updateSourceFetchResult(db, chatId, { last_fetch_status: "error", last_fetch_error: "Pipeline error", sub_type: format });
-    return { sourceChatId: chatId, title, success: false, configCount: limited.length, newCount: 0, duplicateCount: 0, format, error: "Pipeline error" };
+    return { sourceChatId: chatId, title, success: false, configCount: limited.length, newCount: 0, duplicateCount: 0, format, error: "Pipeline error", newConfigIds: [] };
   }
 }
 
 export async function fetchAllSubscriptions(
   db: D1Database,
+  api?: TelegramBotAPI,
   instrumentation?: FetchInstrumentation,
   cancellation?: FetchCancellation
 ): Promise<FetchAllResult> {
@@ -343,12 +344,12 @@ export async function fetchAllSubscriptions(
       console.log(event + " flow_id=" + instrumentation.flowId + (details ? " " + details : ""));
     }
   };
-  cycleLog("FETCH_CYCLE_STARTED");
-  const subs = await getEnabledSubscriptions(db);
+  cycleLog("FETCH_CYCLE_STARTED");  const subs = await getEnabledSubscriptions(db);
   cycleLog("SUBSCRIPTIONS_LOADED", "count=" + subs.length);
   let sc = 0, fc = 0, sk = 0;
   let cancelled = cancellation?.isCancelled() ?? false;
-  const toProcess = subs.slice(0, MAX_SUBS_PER_CYCLE);
+  const errors: string[] = [];
+  const newConfigIds: number[] = [];  const toProcess = subs.slice(0, MAX_SUBS_PER_CYCLE);
   for (const sub of toProcess) {
     if (cancellation?.isCancelled()) {
       cancelled = true;
@@ -360,11 +361,31 @@ export async function fetchAllSubscriptions(
       cancelled = true;
       break;
     }
-    if (r.success) sc++; else fc++;
+    if (r.success) {
+      sc++;
+      newConfigIds.push(...r.newConfigIds);
+    } else {
+      fc++;
+      if (r.error) errors.push((r.title ?? "Sub") + ": " + r.error);
+    }
   }
   cycleLog("FETCH_CYCLE_FINISHED", "duration_ms=" + (Date.now() - cycleStartedAt) + " total=" + (sc + fc + sk) + " success_count=" + sc + " fail_count=" + fc + " skip_count=" + sk + " cancelled=" + cancelled);
-  return { totalProcessed: sc + fc + sk, successCount: sc, failCount: fc, skipCount: sk, cancelled };
-}
+
+  // Auto-publish newly collected configs to the output channel when an
+  // API client is available (manual /send no longer required).
+  let published: AutoPublishResult | undefined;
+  if (api && newConfigIds.length > 0) {
+    try {
+      published = await autoPublishConfigs(db, api, newConfigIds);
+      if (published.published) {
+        console.log("[subscription] auto-published new configs: sent=" + published.sentCount + " total=" + published.totalCount);
+      }
+    } catch (e) {
+      console.error("[subscription] auto-publish failed: " + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  return { totalProcessed: sc + fc + sk, successCount: sc, failCount: fc, skipCount: sk, cancelled, errors, published };}
 
 function shouldFetch(sub: SourceRow): boolean {
   if (!sub.last_fetched_at) return true;

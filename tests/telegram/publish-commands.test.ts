@@ -439,7 +439,7 @@ describe("Publish Commands (Phase 9)", () => {
       expect(commands).toContain("addsource");
       expect(commands).toContain("removesource");
       expect(commands).toContain("sources");
-      expect(commands.length).toBe(17);
+      expect(commands.length).toBe(20);
     });
   });
 

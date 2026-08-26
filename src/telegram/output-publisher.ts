@@ -15,6 +15,10 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import type { TelegramBotAPI } from "./api";
 import { getSetting } from "../db/settings";
+import { getConfigById } from "../db/configs";
+import { applyRemarkToConfigs, DEFAULT_REMARK_TEMPLATE } from "../output/remark";
+import { formatConfigCard } from "../output/config-card";
+import type { ConfigRow } from "../db/connection";
 
 // ─── Constants ─────────────────────────────────────────────
 
@@ -241,4 +245,55 @@ export async function sendConfigCards(
     failedCount,
     totalCount: cards.length,
   };
+}
+
+// ─── Auto-Publish After Fetch ────────────────────────────
+
+/** Max config cards to auto-publish in a single fetch cycle. */
+export const MAX_AUTO_PUBLISH_CARDS = 30;
+
+/** Result of automatically publishing newly fetched configs. */
+export interface AutoPublishResult {
+  /** False when no output channel is configured (silently skipped). */
+  published: boolean;
+  /** Number of cards sent successfully. */
+  sentCount: number;
+  /** Number of new configs that were eligible. */
+  totalCount: number;
+}
+
+/**
+ * Automatically publish newly collected configs to the output channel.
+ * Called right after a successful subscription fetch — no manual /send
+ * needed. Silently skips when the output channel is not configured.
+ * The remark template (if set) is applied so configs carry our own name.
+ */
+export async function autoPublishConfigs(
+  db: D1Database,
+  api: TelegramBotAPI,
+  configIds: number[]
+): Promise<AutoPublishResult> {
+  const totalCount = configIds.length;
+  const channelIdStr = await getSetting(db, "output_channel_id");
+  if (!channelIdStr || isNaN(parseInt(channelIdStr, 10)) || totalCount === 0) {
+    return { published: false, sentCount: 0, totalCount };
+  }
+
+  const template = (await getSetting(db, "remark_template")) ?? DEFAULT_REMARK_TEMPLATE;
+
+  // Load the config rows for the newly inserted IDs
+  const configs: ConfigRow[] = [];
+  for (const id of configIds.slice(0, MAX_AUTO_PUBLISH_CARDS)) {
+    const row = await getConfigById(db, id);
+    if (row && row.is_valid && row.active) configs.push(row);
+  }
+  if (configs.length === 0) {
+    return { published: true, sentCount: 0, totalCount };
+  }
+
+  const uris = applyRemarkToConfigs(configs, template);
+  const cards = configs.map((c, i) => formatConfigCard({ ...c, raw: uris[i] }));
+  const result = await sendConfigCards(db, api, cards);
+
+  return { published: true, sentCount: result.sentCount, totalCount };
 }

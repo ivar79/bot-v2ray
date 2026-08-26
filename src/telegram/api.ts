@@ -68,6 +68,39 @@ export function isValidTelegramFilePath(filePath: string): boolean {
   return true;
 }
 
+// ─── HTML Sanitization ────────────────────────────────
+
+/**
+ * Escape HTML special characters in user-provided content.
+ */
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Sanitize text before sending with parse_mode=HTML.
+ *
+ * Escapes &, <, > first, then restores only the inline tags used across
+ * the project (<b>, <i>, <code>). Any other literal <...> (e.g. <url> in
+ * usage hints, <ساعت> in help text, or config URIs containing &) stays
+ * escaped — otherwise Telegram rejects the message with
+ * "can't parse entities: Unsupported start tag ..." and the button that
+ * produced it appears to do nothing.
+ */
+export function sanitizeTelegramHtml(text: string): string {
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped
+    .replace(/&lt;b&gt;/g, "<b>")
+    .replace(/&lt;\/b&gt;/g, "</b>")
+    .replace(/&lt;i&gt;/g, "<i>")
+    .replace(/&lt;\/i&gt;/g, "</i>")
+    .replace(/&lt;code&gt;/g, "<code>")
+    .replace(/&lt;\/code&gt;/g, "</code>");
+}
+
 // ─── Production Implementation ─────────────────────────────
 
 /** Telegram Bot API base URL. */
@@ -93,6 +126,12 @@ export class RealTelegramBotAPI implements TelegramBotAPI {
       let text = params.text;
       if (text.length > MAX_MESSAGE_LENGTH) {
         text = text.slice(0, MAX_MESSAGE_LENGTH - 20) + "\n\n…(truncated)";
+      }
+
+      // Sanitize literal <...> and & so Telegram's HTML parser never
+      // rejects the message (fixes "can't parse entities" errors)
+      if (params.parse_mode === "HTML") {
+        text = sanitizeTelegramHtml(text);
       }
 
       const body: Record<string, unknown> = {

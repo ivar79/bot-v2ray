@@ -7,7 +7,7 @@ import {
   buildMainMenuKeyboard,
   buildBackKeyboard,
   buildFetchLoadingKeyboard,
-  MENU_CB,
+  buildSendKeyboard,  MENU_CB,
 } from "../../src/telegram/keyboard";
 
 describe("Telegram Keyboard", () => {
@@ -37,7 +37,7 @@ describe("Telegram Keyboard", () => {
     it("should all start with menu: prefix", () => {
       const values = Object.values(MENU_CB);
       for (const val of values) {
-        expect(val).toMatch(/^(menu|autofetch|sub):/);
+        expect(val).toMatch(/^(menu|autofetch|sub|send):/);
       }
     });
   });
@@ -49,25 +49,25 @@ describe("Telegram Keyboard", () => {
       expect(Array.isArray(kb.inline_keyboard)).toBe(true);
     });
 
-    it("should have 3 rows of buttons", () => {
+    it("should have 4 rows of buttons", () => {
       const kb = buildMainMenuKeyboard();
-      expect(kb.inline_keyboard.length).toBe(3);
+      expect(kb.inline_keyboard.length).toBe(4);
     });
 
-    it("should have 2 columns in first two rows, 1 in last", () => {
+    it("should have 2 columns in every row", () => {
       const kb = buildMainMenuKeyboard();
-      expect(kb.inline_keyboard[0].length).toBe(2); // افزودن + لیست
-      expect(kb.inline_keyboard[1].length).toBe(2); // دریافت + تنظیمات
-      expect(kb.inline_keyboard[2].length).toBe(1); // راهنما
+      for (const row of kb.inline_keyboard) {
+        expect(row.length).toBe(2);
+      }
     });
 
-    it("should have 5 buttons total", () => {
+    it("should have 8 buttons total", () => {
       const kb = buildMainMenuKeyboard();
       let count = 0;
       for (const row of kb.inline_keyboard) {
         count += row.length;
       }
-      expect(count).toBe(5);
+      expect(count).toBe(8);
     });
 
     it("should have correct callback_data for each button", () => {
@@ -76,7 +76,10 @@ describe("Telegram Keyboard", () => {
       expect(kb.inline_keyboard[0][1].callback_data).toBe(MENU_CB.LIST_SUBS);
       expect(kb.inline_keyboard[1][0].callback_data).toBe(MENU_CB.FETCH_NOW);
       expect(kb.inline_keyboard[1][1].callback_data).toBe(MENU_CB.AUTO_FETCH);
-      expect(kb.inline_keyboard[2][0].callback_data).toBe(MENU_CB.HELP);
+      expect(kb.inline_keyboard[2][0].callback_data).toBe(MENU_CB.SEND);
+      expect(kb.inline_keyboard[2][1].callback_data).toBe(MENU_CB.SET_REMARK);
+      expect(kb.inline_keyboard[3][0].callback_data).toBe(MENU_CB.SET_WELCOME);
+      expect(kb.inline_keyboard[3][1].callback_data).toBe(MENU_CB.HELP);
     });
 
     it("should have Persian text labels", () => {
@@ -87,6 +90,9 @@ describe("Telegram Keyboard", () => {
       expect(allText).toContain("دریافت");
       expect(allText).toContain("تنظیمات");
       expect(allText).toContain("راهنما");
+      expect(allText).toContain("ارسال");
+      expect(allText).toContain("قالب");
+      expect(allText).toContain("خوش");
     });
 
     it("should have emoji prefixes on buttons", () => {
@@ -97,6 +103,9 @@ describe("Telegram Keyboard", () => {
       expect(allText).toContain("🔄");
       expect(allText).toContain("⚙️");
       expect(allText).toContain("❓");
+      expect(allText).toContain("📤");
+      expect(allText).toContain("🏷️");
+      expect(allText).toContain("👋");
     });
   });
 
@@ -126,6 +135,29 @@ describe("Telegram Keyboard", () => {
     it("should have Persian back label", () => {
       const kb = buildBackKeyboard();
       expect(kb.inline_keyboard[0][0].text).toContain("بازگشت");
+    });
+  });
+
+  describe("buildSendKeyboard()", () => {
+    it("should return a valid inline keyboard", () => {
+      const kb = buildSendKeyboard();
+      expect(kb).toHaveProperty("inline_keyboard");
+      expect(kb.inline_keyboard.length).toBe(3);
+    });
+
+    it("should have files, recent, all and cancel actions", () => {
+      const kb = buildSendKeyboard();
+      const flat = kb.inline_keyboard.flat().map((b) => b.callback_data);
+      expect(flat).toContain(MENU_CB.SEND_FILES);
+      expect(flat).toContain(MENU_CB.SEND_RECENT);
+      expect(flat).toContain(MENU_CB.SEND_ALL);
+      expect(flat).toContain(MENU_CB.SEND_CANCEL);
+    });
+
+    it("should have a back-to-menu button", () => {
+      const kb = buildSendKeyboard();
+      const flat = kb.inline_keyboard.flat().map((b) => b.callback_data);
+      expect(flat).toContain(MENU_CB.BACK);
     });
   });
 });

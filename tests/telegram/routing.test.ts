@@ -152,7 +152,7 @@ describe("Telegram Update Routing", () => {
   });
 
   describe("processCallbackQuery()", () => {
-    it("should acknowledge callback queries", async () => {
+    it("should hint to open a fresh menu for unknown/stale callback data", async () => {
       const callbackQuery: TgCallbackQuery = {
         id: "cb123",
         from: { id: 111111, is_bot: false, first_name: "Admin" },
@@ -161,8 +161,31 @@ describe("Telegram Update Routing", () => {
 
       await processCallbackQuery(callbackQuery, db, api, adminUserIds);
 
+      // Old operator-selection buttons ("operator:") are stale — the user
+      // gets a visible hint instead of a silent acknowledgement.
+      expect(api.sendMessageCalls.length).toBe(1);
+      expect(api.sendMessageCalls[0].text).toContain("/menu");
       expect(api.answerCallbackQueryCalls.length).toBe(1);
       expect(api.answerCallbackQueryCalls[0].callback_query_id).toBe("cb123");
+    });
+
+    it("should hint for stale menu actions", async () => {
+      const callbackQuery: TgCallbackQuery = {
+        id: "cb-old-menu",
+        from: { id: 111111, is_bot: false, first_name: "Admin" },
+        message: {
+          message_id: 99,
+          chat: { id: 111111, type: "private" },
+          date: Date.now(),
+        },
+        data: "menu:oldaction",
+      };
+
+      await processCallbackQuery(callbackQuery, db, api, adminUserIds);
+
+      expect(api.sendMessageCalls.length).toBe(1);
+      expect(api.sendMessageCalls[0].text).toContain("قدیمی");
+      expect(api.answerCallbackQueryCalls.length).toBe(1);
     });
 
     it("should route menu:help callback to help handler (admin)", async () => {

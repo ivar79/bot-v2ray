@@ -185,7 +185,7 @@ describe("Subscription Fetcher", () => {
         .bind("http://localhost:99999/should-not-fetch", "active", 7001)
         .run();
 
-      const result = await fetchAllSubscriptions(db, undefined, {
+      const result = await fetchAllSubscriptions(db, undefined, undefined, {
         isCancelled: () => true,
       });
 

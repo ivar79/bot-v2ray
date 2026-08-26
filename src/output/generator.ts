@@ -39,6 +39,8 @@ import {
   countActiveConfigsByOperator,
 } from "../db/configs";
 import { countSources } from "../db/sources";
+import { getSetting } from "../db/settings";
+import { applyRemarkToConfigs } from "./remark";
 import { countBatches } from "../db/batches";
 import type { OutputStats } from "./types";
 import { PROTOCOL_FILES, OPERATOR_FILES } from "./types";
@@ -53,8 +55,11 @@ import { generateReadme } from "./readme";
  * Each line is the raw URI of one config.
  */
 export async function generateAllTxt(db: D1Database): Promise<string> {
-  const configs = await getActiveConfigs(db);
-  return configsToTxt(configs);
+  const [configs, template] = await Promise.all([
+    getActiveConfigs(db),
+    getSetting(db, "remark_template"),
+  ]);
+  return configsToTxt(configs, template);
 }
 
 /**
@@ -65,8 +70,11 @@ export async function generateProtocolTxt(
   db: D1Database,
   protocol: string
 ): Promise<string> {
-  const configs = await getActiveConfigsByProtocol(db, protocol);
-  return configsToTxt(configs);
+  const [configs, template] = await Promise.all([
+    getActiveConfigsByProtocol(db, protocol),
+    getSetting(db, "remark_template"),
+  ]);
+  return configsToTxt(configs, template);
 }
 
 /**
@@ -81,8 +89,11 @@ export async function generateOperatorTxt(
   db: D1Database,
   operator: string
 ): Promise<string> {
-  const configs = await getActiveConfigsByOperator(db, operator);
-  return configsToTxt(configs);
+  const [configs, template] = await Promise.all([
+    getActiveConfigsByOperator(db, operator),
+    getSetting(db, "remark_template"),
+  ]);
+  return configsToTxt(configs, template);
 }
 
 // ─── Bulk Generation ───────────────────────────────────────
@@ -139,9 +150,17 @@ export async function generateAllOutputs(
  * Sorting: protocol ASC, then config_hash ASC.
  * Trailing newline at end of file.
  */
-export function configsToTxt(configs: ConfigRow[]): string {
-  // Already sorted by protocol, config_hash from the DB query
-  return configs.map((c) => c.raw).join("\n") + (configs.length > 0 ? "\n" : "");
+export function configsToTxt(
+  configs: ConfigRow[],
+  remarkTemplate?: string | null
+): string {
+  // Already sorted by protocol, config_hash from the DB query.
+  // When a remark template is configured, rewrite each URI's remark
+  // (name) to our own channel name — stored configs are never touched.
+  const lines = remarkTemplate
+    ? applyRemarkToConfigs(configs, remarkTemplate)
+    : configs.map((c) => c.raw);
+  return lines.join("\n") + (configs.length > 0 ? "\n" : "");
 }
 
 /**
