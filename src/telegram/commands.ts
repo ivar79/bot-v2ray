@@ -1593,8 +1593,8 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
   const text = getMessageText(message);
   const parts = text.split(/\s+/);
 
-  // No arguments — show current settings
-  if (parts.length < 2) {
+  // Button presses or no arguments — show current settings
+  if (ctx.isCallback || parts.length < 2) {
     const sources = await getAllSources(db);
     const subs = sources.filter((s) => s.sub_url);
     const activeCount = subs.filter(
@@ -1689,7 +1689,7 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
   // Unknown subcommand
   await api.sendMessage({
     chat_id: chatId,
-    text: "\u26A0\uFE0F \u0627\u0633\u062A\u0641\u0627\u062F\u0647 \u0646\u0627\u0634\u0646\u0627\u062E\u062A\u0647. \u0628\u0631\u0627\u06CC \u0631\u0627\u0647\u0646\u0645\u0627\u06CC\u06CC /autofetch \u062A\u0648\u0633\u06CC\u0637 \u06A9\u0646\u06CC\u062F.",
+    text: "\u26A0\uFE0F \u06AF\u0632\u06CC\u0646\u0647 \u0646\u0627\u0634\u0646\u0627\u062E\u062A\u0647. \u0628\u0631\u0627\u06CC \u0631\u0627\u0647\u0646\u0645\u0627\u06CC\u06CC /autofetch \u0631\u0627 \u0648\u0627\u0631\u062F \u06A9\u0646\u06CC\u062F.",
     reply_markup: buildBackKeyboard(),
   });
 }

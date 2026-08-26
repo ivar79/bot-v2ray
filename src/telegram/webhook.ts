@@ -96,13 +96,20 @@ export async function handleWebhookRequest(
     + " hasChannelPost=" + !!update.channel_post
     + " hasCallbackQuery=" + !!update.callback_query);
 
-  // ── Step 3: Check idempotency ──
+  // ── Step 3: Claim the update before routing ──
   const alreadyProcessed = await isUpdateProcessed(env.DB, update.update_id);
   if (alreadyProcessed) {
     console.log("[webhook] update " + update.update_id + " already processed, skipping");
     // Return 200 so Telegram doesn't retry
     return new Response("OK", { status: 200 });
   }
+
+  // Claiming (marking processed) up-front means a Telegram retry that arrives
+  // while a long-running handler is still executing (e.g. a manual subscription
+  // fetch that outlives the webhook timeout) is rejected by the idempotency
+  // check above instead of re-executed — which used to duplicate the "fetching"
+  // progress message and start duplicate fetches.
+  await markUpdateProcessed(env.DB, update.update_id);
 
   // ── Step 4: Route the update ──
   try {
@@ -113,12 +120,6 @@ export async function handleWebhookRequest(
     // internal errors to Telegram. Still return 200 to prevent retries.
     console.error("[webhook] routeUpdate failed: update_id=" + update.update_id + " error=" + (e instanceof Error ? (e.stack ?? e.message) : String(e)));
   }
-
-  // ── Step 5: Mark as processed ──
-  // Mark even if routing failed to prevent infinite retries
-  // of the same malformed update
-  await markUpdateProcessed(env.DB, update.update_id);
-  console.log("[webhook] update " + update.update_id + " marked as processed");
 
   return new Response("OK", { status: 200 });
 }

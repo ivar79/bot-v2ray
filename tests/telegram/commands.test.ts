@@ -14,7 +14,9 @@ import {
   handleStatus,
   handleCancel,
   handleListSub,
-  handleDeleteSub,  executeCommand,
+  handleDeleteSub,
+  handleAutoFetch,
+  executeCommand,
   getRegisteredCommands,
 } from "../../src/telegram/commands";
 import type { CommandContext } from "../../src/telegram/commands";
@@ -265,5 +267,32 @@ describe("/listsub + delete subscription", () => {
 
     expect(api.sendMessageCalls.length).toBe(1);
     expect(api.sendMessageCalls[0].text).toContain("Access denied");
+  });
+
+  describe("/autofetch", () => {
+    it("shows settings when invoked from a menu button (callback), not the menu text", async () => {
+      const message = makeMessage({
+        text: "📱 منوی اصلی\n\nیکی از عملیات زیر را انتخاب کنید:",
+      });
+      await handleAutoFetch(makeCtx(db, api, { message, isCallback: true }));
+
+      expect(api.sendMessageCalls.length).toBe(1);
+      expect(api.sendMessageCalls[0].text).toContain("تنظیمات دریافت خودکار");
+      expect(api.sendMessageCalls[0].text).not.toContain("ناشناخته");
+    });
+
+    it("shows settings when no arguments are given", async () => {
+      await handleAutoFetch(makeCtx(db, api, { message: makeMessage({ text: "/autofetch" }) }));
+
+      expect(api.sendMessageCalls.length).toBe(1);
+      expect(api.sendMessageCalls[0].text).toContain("تنظیمات دریافت خودکار");
+    });
+
+    it("shows unknown-option hint for an unrecognized typed subcommand", async () => {
+      await handleAutoFetch(makeCtx(db, api, { message: makeMessage({ text: "/autofetch bogus" }) }));
+
+      expect(api.sendMessageCalls.length).toBe(1);
+      expect(api.sendMessageCalls[0].text).toContain("گزینه ناشناخته");
+    });
   });
 });

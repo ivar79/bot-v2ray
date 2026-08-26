@@ -209,6 +209,41 @@ describe("Webhook Handler", () => {
       expect(await isUpdateProcessed(db, 3001)).toBe(true);
       expect(await isUpdateProcessed(db, 3002)).toBe(true);
     });
+
+    it("should reject a retry while the first delivery is still processing", async () => {
+      const update = makeUpdate(5001);
+      const api = getMockApi();
+      const originalSend = api.sendMessage.bind(api);
+      let sendCount = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      api.sendMessage = async (params) => {
+        sendCount++;
+        await gate;
+        return originalSend(params);
+      };
+
+      // First delivery starts processing and blocks inside sendMessage
+      const first = handleWebhookRequest(makeRequest(update), makeEnv(db), api);
+
+      // Wait until the first delivery has entered routing — by then the
+      // update is already claimed, so a duplicate must be rejected
+      for (let i = 0; i < 100 && sendCount === 0; i++) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(sendCount).toBe(1);
+
+      // Telegram retries the same update while the first is still running
+      const second = await handleWebhookRequest(makeRequest(update), makeEnv(db), api);
+      expect(second.status).toBe(200);
+      expect(sendCount).toBe(1); // must not re-execute the handler
+
+      // Release the first delivery and let it finish
+      release();
+      const firstResponse = await first;
+      expect(firstResponse.status).toBe(200);
+      expect(sendCount).toBe(1);
+    });
   });
 
   describe("Update Routing", () => {

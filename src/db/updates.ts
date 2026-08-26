@@ -14,12 +14,13 @@ import { nowISO } from "./connection";
 // ─── Core Idempotency ───────────────────────────────────────
 
 /**
- * Record a processed update. Returns true if inserted successfully.
- * Returns false if the update was already processed (duplicate).
+ * Claim a processed update. Returns true if inserted successfully.
+ * Returns false if the update was already claimed (duplicate).
  *
- * This is the primary idempotency mechanism: callers should
- * check `isUpdateProcessed` first, and only call this after
- * successful processing.
+ * This is the primary idempotency mechanism. Call it BEFORE processing
+ * the update: a Telegram retry that arrives while a long-running handler
+ * (e.g. a manual subscription fetch) is still executing is then rejected
+ * by the idempotency check instead of re-executed.
  */
 export async function markUpdateProcessed(
   db: D1Database,
