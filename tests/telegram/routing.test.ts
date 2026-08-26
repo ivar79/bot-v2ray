@@ -14,6 +14,8 @@ import {
   processCallbackQuery,
 } from "../../src/telegram/routing";
 import type { TgMessage, TgChannelPost, TgCallbackQuery } from "../../src/telegram/types";
+import { registerFetch, isFetchActive, unregisterFetch, getFetchAbortSignal } from "../../src/ingest/subscription";
+import { MENU_CB } from "../../src/telegram/keyboard";
 
 function makeAdminMessage(text: string): TgMessage {
   return {
@@ -198,6 +200,104 @@ describe("Telegram Update Routing", () => {
 
       expect(api.sendMessageCalls.length).toBe(1);
       expect(api.sendMessageCalls[0].text).toContain("Access denied");
+    });
+
+    it("should include a cancellation button when starting fetch", async () => {
+      const callbackQuery: TgCallbackQuery = {
+        id: "cb-loading",
+        from: { id: 222222, is_bot: false, first_name: "Admin2" },
+        message: {
+          message_id: 12,
+          chat: { id: 222222, type: "private" },
+          date: Date.now(),
+        },
+        data: "menu:fetch",
+      };
+
+      await processCallbackQuery(callbackQuery, db, api, adminUserIds);
+
+      expect(api.sendMessageCalls[0].reply_markup?.inline_keyboard[0][0].callback_data)
+        .toMatch(new RegExp("^" + MENU_CB.FETCH_CANCEL_PREFIX));
+    });
+
+    it("should accept the legacy fetch cancellation callback", async () => {
+      const flowId = "legacy-flow";
+      await registerFetch(flowId, 111111, 111111, db);
+
+      await processCallbackQuery({
+        id: "cb-legacy-cancel",
+        from: { id: 111111, is_bot: false, first_name: "Admin" },
+        message: {
+          message_id: 13,
+          chat: { id: 111111, type: "private" },
+          date: Date.now(),
+        },
+        data: "fetch:cancel:" + flowId,
+      }, db, api, adminUserIds);
+
+      expect(api.answerCallbackQueryCalls.at(-1)?.text).toContain("لغو");
+      await unregisterFetch(flowId, db, 111111, "cancelled");
+    });
+
+    it("should cancel an owned fetch callback", async () => {
+      const flowId = "owned-flow";
+      await registerFetch(flowId, 111111, 111111, db);
+      expect(isFetchActive(flowId)).toBe(true);
+      const abortSignal = getFetchAbortSignal(flowId)!;
+      expect(abortSignal.aborted).toBe(false);
+
+      await processCallbackQuery({
+        id: "cb-cancel",
+        from: { id: 111111, is_bot: false, first_name: "Admin" },
+        message: {
+          message_id: 13,
+          chat: { id: 111111, type: "private" },
+          date: Date.now(),
+        },
+        data: MENU_CB.FETCH_CANCEL_PREFIX + flowId,
+      }, db, api, adminUserIds);
+
+      expect(api.answerCallbackQueryCalls.at(-1)?.text).toContain("لغو");
+      expect(abortSignal.aborted).toBe(true);
+      expect(isFetchActive(flowId)).toBe(true);
+      await unregisterFetch(flowId, db, 111111);
+    });
+
+    it("should not cancel a fetch owned by another user", async () => {
+      const flowId = "foreign-flow";
+      await registerFetch(flowId, 222222, 222222, db);
+
+      await processCallbackQuery({
+        id: "cb-foreign-cancel",
+        from: { id: 111111, is_bot: false, first_name: "Admin" },
+        message: {
+          message_id: 14,
+          chat: { id: 222222, type: "private" },
+          date: Date.now(),
+        },
+        data: MENU_CB.FETCH_CANCEL_PREFIX + flowId,
+      }, db, api, adminUserIds);
+
+      expect(api.answerCallbackQueryCalls.at(-1)?.text).toContain("فعال نیست");
+      await unregisterFetch(flowId, db, 222222, "failed");
+    });
+
+    it("should not start another fetch for a duplicate menu click", async () => {
+      const flowId = "already-running";
+      await registerFetch(flowId, 222222, 222222, db);
+      await processCallbackQuery({
+        id: "cb-duplicate-fetch",
+        from: { id: 222222, is_bot: false, first_name: "Admin2" },
+        message: {
+          message_id: 15,
+          chat: { id: 222222, type: "private" },
+          date: Date.now(),
+        },
+        data: "menu:fetch",
+      }, db, api, adminUserIds);
+
+      expect(api.sendMessageCalls[0].text).toContain("در حال اجراست");
+      await unregisterFetch(flowId, db, 222222, "failed");
     });
 
     it("should route menu:fetch callback to fetch handler (admin)", async () => {

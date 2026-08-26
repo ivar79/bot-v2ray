@@ -12,12 +12,13 @@ import type { TgMessage, TgChannelPost, TgCallbackQuery } from "./types";
 import { getMessageText, isPrivateChat, isChannelChat } from "./types";
 import type { TelegramBotAPI } from "./api";
 import { executeCommand, handleMenuAction, type CommandContext } from "./commands";
+import { cancelFetch, getActiveFetch } from "../ingest/subscription";
 import { isAdmin } from "./auth";
 import { handleTextUpload, handleDocumentUpload, handleOperatorSelection } from "../ingest/admin";
 import { handleChannelPost } from "../ingest/channel";
 import { dispatchConversationState } from "./conversations";
 import { clearAdminState } from "../db/admin-states";
-import { buildAutoFetchKeyboard } from "./keyboard";
+import { buildAutoFetchKeyboard, MENU_CB } from "./keyboard";
 import { getAllSources, updateSource } from "../db/sources";
 import type { GitHubAPI } from "../github/api";
 
@@ -121,9 +122,40 @@ export async function processCallbackQuery(
 
   if (!data) return;
 
+  // Handle cancellation of a running subscription fetch.
+  if (data.startsWith(MENU_CB.FETCH_CANCEL_PREFIX) || data.startsWith("fetch:cancel:")) {
+    const prefix = data.startsWith(MENU_CB.FETCH_CANCEL_PREFIX)
+      ? MENU_CB.FETCH_CANCEL_PREFIX
+      : "fetch:cancel:";
+    const flowId = data.slice(prefix.length);
+    const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
+    const cancelled = isAdmin(userId, adminUserIds)
+      && await cancelFetch(flowId, userId, chatId, db);
+    await api.answerCallbackQuery({
+      callback_query_id: callbackQuery.id,
+      text: cancelled ? "دریافت در حال لغو شدن است..." : "این دریافت دیگر فعال نیست.",
+    });
+    return;
+  }
+
   // Handle menu button presses (menu:action)
   if (data.startsWith("menu:")) {
     const action = data.slice(5); // Remove "menu:" prefix
+    if (action === "fetch") {
+      const activeFlowId = await getActiveFetch(userId, callbackQuery.message?.chat?.id ?? userId, db);
+      if (activeFlowId) {
+        await api.sendMessage({
+          chat_id: callbackQuery.message?.chat?.id ?? userId,
+          text: "⏳ یک دریافت دیگر برای شما در حال اجراست. برای لغو، دکمهٔ «لغو دریافت» همان پیام را بزنید.",
+        });
+        await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "دریافت از قبل در حال اجراست." });
+        return;
+      }
+    }
+    const isFetchCallback = data === "menu:fetch";
+    if (isFetchCallback) {
+      console.log("CALLBACK_FETCH_RECEIVED callback_id=" + callbackQuery.id + " user_id=" + callbackQuery.from.id + " chat_id=" + (callbackQuery.message?.chat?.id ?? "unavailable"));
+    }
     const ctx = {
       db,
       api,
@@ -132,7 +164,9 @@ export async function processCallbackQuery(
       userId: callbackQuery.from.id,
       isCallback: true,
     };
+    if (isFetchCallback) console.log("CALLBACK_FETCH_DISPATCH_STARTED action=fetch");
     await handleMenuAction(action, ctx);
+    if (isFetchCallback) console.log("CALLBACK_FETCH_DISPATCH_FINISHED action=fetch");
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;
   }
@@ -162,9 +196,17 @@ export async function processCallbackQuery(
     return;
   }
   // Handle sub cancel callback
-  if (data === "sub:cancel") {
-    await clearAdminState(db, callbackQuery.from.id);
+  if (data === MENU_CB.SUB_CANCEL) {
     const chatId = callbackQuery.message?.chat?.id ?? callbackQuery.from.id;
+    if (!isAdmin(userId, adminUserIds)) {
+      await api.answerCallbackQuery({
+        callback_query_id: callbackQuery.id,
+        text: "دسترسی غیرمجاز",
+        show_alert: true,
+      });
+      return;
+    }
+    await clearAdminState(db, userId);
     await api.sendMessage({ chat_id: chatId, text: "❌ عملیات لغو شد." });
     await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     return;

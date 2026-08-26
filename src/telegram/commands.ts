@@ -28,9 +28,23 @@ import { publishToGitHub, createPublisherConfig } from "../github/publisher";
 import { createGitHubAPI, type GitHubAPI } from "../github/api";
 import { getSetting, setSetting } from "../db/settings";
 import { publishToTelegramChannel } from "./output-publisher";
-import { buildMainMenuKeyboard, buildBackKeyboard, buildAutoFetchKeyboard, buildSubPromptKeyboard } from "./keyboard";
+import {
+  buildMainMenuKeyboard,
+  buildBackKeyboard,
+  buildAutoFetchKeyboard,
+  buildSubPromptKeyboard,
+  buildFetchLoadingKeyboard,
+} from "./keyboard";
 import { getSourceByChatId, insertSource, updateSource } from "../db/sources";
-import { fetchAllSubscriptions } from "../ingest/subscription";
+import {
+  fetchAllSubscriptions,
+  registerFetch,
+  getActiveFetch,
+  cancelFetch,
+  getFetchCancellation,
+  getFetchAbortSignal,
+  unregisterFetch,
+} from "../ingest/subscription";
 
 // ─── Command Context ───────────────────────────────────────
 
@@ -269,6 +283,15 @@ export async function handleCancel(ctx: CommandContext): Promise<void> {
     await api.sendMessage({
       chat_id: chatId,
       text: "⛔ Access denied.",
+    });
+    return;
+  }
+
+  const activeFlowId = await getActiveFetch(userId, chatId, db);
+  if (activeFlowId && await cancelFetch(activeFlowId, userId, chatId, db)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "❌ درخواست لغو دریافت ثبت شد.",
     });
     return;
   }
@@ -1061,6 +1084,15 @@ export async function handleFetchNow(ctx: CommandContext): Promise<void> {
   const { db, api, message, adminUserIds } = ctx;
   const chatId = message.chat.id;
   const userId = ctx.userId ?? message.from?.id;
+  const instrumentationEnabled = ctx.isCallback === true;
+  const flowId = crypto.randomUUID();
+  const flowLog = (event: string, details = "") => {
+    if (instrumentationEnabled) {
+      console.log(event + " flow_id=" + flowId + (details ? " " + details : ""));
+    }
+  };
+
+  flowLog("FETCH_HANDLER_STARTED", "user_id=" + (userId ?? "unavailable") + " chat_id=" + chatId);
 
   if (!userId || !isAdmin(userId, adminUserIds)) {
     await api.sendMessage({
@@ -1070,17 +1102,46 @@ export async function handleFetchNow(ctx: CommandContext): Promise<void> {
     return;
   }
 
-  await api.sendMessage({
+  const activeFlowId = await getActiveFetch(userId, chatId, db);
+  if (activeFlowId) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⏳ یک دریافت دیگر برای شما در حال اجراست.",
+    });
+    return;
+  }
+
+  if (!await registerFetch(flowId, userId, chatId, db)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: "⚠️ شروع دریافت ممکن نیست. دوباره تلاش کنید.",
+    });
+    return;
+  }
+
+  flowLog("LOADING_SEND_STARTED");
+  const loadingSent = await api.sendMessage({
     chat_id: chatId,
-    text: "\uD83D\uDD04 <b>\u062F\u0631 \u062D\u0627\u0644 \u062F\u0631\u06CC\u0627\u0641\u062A...</b>",
+    text: "🔄 <b>در حال دریافت...</b>",
     parse_mode: "HTML",
+    reply_markup: buildFetchLoadingKeyboard(flowId),
   });
+  flowLog("LOADING_SEND_FINISHED", "success=" + loadingSent);
 
   try {
-    const result = await fetchAllSubscriptions(db);
+    flowLog("FETCH_ALL_STARTED");
+    const fetchStartedAt = Date.now();
+    const result = await fetchAllSubscriptions(
+      db,
+      { flowId, abortSignal: getFetchAbortSignal(flowId) ?? undefined },
+      getFetchCancellation(flowId, db, userId) ?? undefined
+    );
+    flowLog("FETCH_ALL_FINISHED", "duration_ms=" + (Date.now() - fetchStartedAt) + " total=" + result.totalProcessed + " success_count=" + result.successCount + " fail_count=" + result.failCount + " skip_count=" + result.skipCount);
 
     const lines: string[] = [
-      "\u2705 <b>\u0646\u062A\u06CC\u062C\u0647 \u062F\u0631\u06CC\u0627\u0641\u062A</b>",
+      result.cancelled
+        ? "❌ <b>دریافت لغو شد</b>"
+        : "\u2705 <b>\u0646\u062A\u06CC\u062C\u0647 \u062F\u0631\u06CC\u0627\u0641\u062A</b>",
       "",
       "\uD83D\uDCCA \u06A9\u0644 \u067E\u0631\u062F\u0627\u0632\u0634: " + result.totalProcessed,
       "\u2705 \u0645\u0648\u0641\u0642: " + result.successCount,
@@ -1091,18 +1152,25 @@ export async function handleFetchNow(ctx: CommandContext): Promise<void> {
       lines.push("\u23F8\uFE0F \u0631\u062E\u0634\u062F\u0647: " + result.skipCount);
     }
 
-    await api.sendMessage({
+    flowLog("RESULT_SEND_STARTED");
+    const resultSent = await api.sendMessage({
       chat_id: chatId,
       text: lines.join("\n"),
       parse_mode: "HTML",
       reply_markup: buildBackKeyboard(),
     });
+    flowLog("RESULT_SEND_FINISHED", "success=" + resultSent);
+    flowLog("FLOW_COMPLETED");
   } catch {
+    flowLog("FETCH_HANDLER_FAILED", "error_code=fetch_handler_error");
     await api.sendMessage({
       chat_id: chatId,
       text: "\u26A0\uFE0F \u062E\u0637\u0627 \u062F\u0631 \u062F\u0631\u06CC\u0627\u0641\u062A. \u0644\u0637\u0641\u0627\u064B \u0628\u0639\u062F\u0627 \u062A\u0644\u0627\u0634 \u06A9\u0646\u06CC\u062F.",
       reply_markup: buildBackKeyboard(),
     });
+  } finally {
+    const cancelled = (await getFetchCancellation(flowId, db, userId))?.isCancelled() === true;
+    await unregisterFetch(flowId, db, userId, cancelled ? "cancelled" : "completed");
   }
 }
 

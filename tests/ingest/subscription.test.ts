@@ -12,9 +12,15 @@ import {
   fetchWithLimits,
   fetchSingleSubscription,
   fetchAllSubscriptions,
+  registerFetch,
+  cancelFetch,
+  getFetchCancellation,
+  isFetchCancelled,
+  unregisterFetch,
   type SubFormat,
 } from "../../src/ingest/subscription";
 import { insertSource } from "../../src/db/sources";
+import { getFetchRun } from "../../src/db/fetch-runs";
 
 describe("Subscription Fetcher", () => {
   let db: D1Database;
@@ -148,6 +154,42 @@ describe("Subscription Fetcher", () => {
   describe("fetchAllSubscriptions()", () => {
     it("should return zero results when no subscriptions exist", async () => {
       const result = await fetchAllSubscriptions(db);
+      expect(result.totalProcessed).toBe(0);
+      expect(result.successCount).toBe(0);
+      expect(result.failCount).toBe(0);
+    });
+
+    it("should persist cancellation so another request context can observe it", async () => {
+      const flowId = "persistent-cancel-flow";
+      await registerFetch(flowId, 7002, 7002, db);
+
+      // Simulate the callback request: the original request's isolate-local Map is gone.
+      await unregisterFetch(flowId);
+      await cancelFetch(flowId, 7002, 7002, db);
+      expect(await isFetchCancelled(flowId, db)).toBe(true);
+
+      await unregisterFetch(flowId, db, 7002, "cancelled");
+      expect((await getFetchRun(db, flowId))?.status).toBe("cancelled");
+    });
+
+    it("should stop before processing when cancellation is already requested", async () => {
+      await insertSource(db, {
+        chat_id: 7001,
+        title: "Cancelled source",
+        type: "subscription",
+        enabled: 1,
+        trusted: 1,
+      });
+      await db
+        .prepare("UPDATE sources SET sub_url = ?, sub_status = ?, auto_fetch = 1 WHERE chat_id = ?")
+        .bind("http://localhost:99999/should-not-fetch", "active", 7001)
+        .run();
+
+      const result = await fetchAllSubscriptions(db, undefined, {
+        isCancelled: () => true,
+      });
+
+      expect(result.cancelled).toBe(true);
       expect(result.totalProcessed).toBe(0);
       expect(result.successCount).toBe(0);
       expect(result.failCount).toBe(0);

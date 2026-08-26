@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildMainMenuKeyboard,
   buildBackKeyboard,
+  buildFetchLoadingKeyboard,
   MENU_CB,
 } from "../../src/telegram/keyboard";
 
@@ -96,6 +97,16 @@ describe("Telegram Keyboard", () => {
       expect(allText).toContain("🔄");
       expect(allText).toContain("⚙️");
       expect(allText).toContain("❓");
+    });
+  });
+
+  describe("buildFetchLoadingKeyboard()", () => {
+    it("should include a fetch cancellation callback containing the flow id", () => {
+      const kb = buildFetchLoadingKeyboard("flow-123");
+      expect(kb.inline_keyboard[0][0].text).toContain("لغو");
+      expect(kb.inline_keyboard[0][0].callback_data).toBe(
+        MENU_CB.FETCH_CANCEL_PREFIX + "flow-123"
+      );
     });
   });
 

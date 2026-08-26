@@ -28,6 +28,7 @@ export const MENU_CB = {
   AF_INT_24:  "autofetch:interval:24",
   // Sub flow
   SUB_CANCEL: "sub:cancel",
+  FETCH_CANCEL_PREFIX: "menu:fetchcancel:",
 } as const;
 
 // ─── Keyboard Builders ────────────────────────────────────
@@ -100,6 +101,14 @@ export function buildAutoFetchKeyboard(): TgInlineKeyboardMarkup {
 /**
  * Build a cancel keyboard for sub conversation flow.
  */
+export function buildFetchLoadingKeyboard(flowId: string): TgInlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "❌ لغو دریافت", callback_data: MENU_CB.FETCH_CANCEL_PREFIX + flowId }],
+    ],
+  };
+}
+
 export function buildSubPromptKeyboard(): TgInlineKeyboardMarkup {
   return {
     inline_keyboard: [

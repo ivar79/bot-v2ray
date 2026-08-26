@@ -12,6 +12,7 @@ import {
   handleStart,
   handleHelp,
   handleStatus,
+  handleCancel,
   executeCommand,
   getRegisteredCommands,
 } from "../../src/telegram/commands";
@@ -19,6 +20,7 @@ import type { CommandContext } from "../../src/telegram/commands";
 import type { TgMessage } from "../../src/telegram/types";
 import { insertConfig } from "../../src/db/configs";
 import { insertSource } from "../../src/db/sources";
+import { registerFetch, isFetchActive, unregisterFetch } from "../../src/ingest/subscription";
 
 function makeMessage(overrides: Partial<TgMessage> = {}): TgMessage {
   return {
@@ -149,6 +151,21 @@ describe("Command Handlers", () => {
 
       expect(api.sendMessageCalls.length).toBe(1);
       expect(api.sendMessageCalls[0].text).toContain("Error");
+    });
+  });
+
+  describe("/cancel", () => {
+    it("should cancel a running fetch before checking upload state", async () => {
+      const flowId = "command-cancel-flow";
+      await registerFetch(flowId, 111111, 111111, db);
+
+      await handleCancel(makeCtx(db, api, {
+        message: makeMessage({ text: "/cancel" }),
+      }));
+
+      expect(api.sendMessageCalls[0].text).toContain("لغو دریافت");
+      expect(isFetchActive(flowId)).toBe(true);
+      await unregisterFetch(flowId, db, 111111);
     });
   });
 

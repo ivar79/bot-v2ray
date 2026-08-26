@@ -28,6 +28,7 @@ export function createTestDB(): D1Database {
     "0001_initial.sql",
     "0002_add_location.sql",
     "0003_add_subscriptions.sql",
+    "0004_fetch_runs.sql",
   ];
   for (const file of migrations) {
     const path = resolve(__dirname, "../../migrations/" + file);
