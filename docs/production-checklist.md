@@ -16,7 +16,7 @@ V2Ray Aggregator — Cloudflare Workers + D1 + Telegram Bot + GitHub Publication
 | Migration | ✅ | Single file, 8 tables, all indexes present |
 | Node.js compat | ✅ | `nodejs_compat` flag required for crypto |
 | Build size | ✅ | 143.82 KiB / 26.99 KiB gzip |
-| Tests | ✅ | 573 tests, all passing |
+| Tests | ✅ | 703 tests, all passing |
 | Typecheck | ✅ | Clean, no errors |
 
 ---
@@ -307,7 +307,33 @@ From an **admin** account, send `/upload` then a V2Ray config.
 
 - ✅ Source added, listed, and removed
 
-### 8.7 GitHub publication (if configured)
+### 8.7 Subscription ingestion
+
+```
+/addsub https://example.com/sub.txt TestSub
+/listsub
+/fetch
+/autofetch interval 6
+```
+
+- ✅ Subscription added with auto-fetch enabled
+- ✅ `/listsub` shows the subscription with status
+- ✅ `/fetch` reports processed/success/fail counts
+- ✅ New configs auto-published to output channel (if set)
+- ✅ Delete works via the 🗑 button in `/listsub`
+
+### 8.8 Send and formatting
+
+```
+/send files
+/send recent
+/setremark {flag} {country}
+```
+
+- ✅ Files sent to output channel
+- ✅ Recent configs sent as cards with remark template applied
+
+### 8.9 GitHub publication (if configured)
 
 ```
 /setgithub owner repo main
@@ -317,7 +343,7 @@ From an **admin** account, send `/upload` then a V2Ray config.
 - ✅ Publication status reported
 - ✅ No tokens or secrets in Telegram messages
 
-### 8.8 Status
+### 8.10 Status
 
 ```
 /status
@@ -352,8 +378,8 @@ From an **admin** account, send `/upload` then a V2Ray config.
 |--------|-------|
 | Bundle size | 143.82 KiB |
 | Gzip size | 26.99 KiB |
-| Test count | 573 |
-| Test files | 32 |
+| Test count | 703 |
+| Test files | 39 |
 | Typecheck | Clean |
 
 ---
