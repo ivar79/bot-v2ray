@@ -241,6 +241,17 @@ describe("/listsub + delete subscription", () => {
     expect(flat.some((b) => b.callback_data === "del_sub:12345")).toBe(true);
   });
 
+  it("listsub falls back to the URL hostname for non-meaningful titles", async () => {
+    await insertTestSub(db, 555, "5", "https://manager.example.com/sub");
+
+    await handleListSub(makeCtx(db, api));
+
+    const msg = api.sendMessageCalls[0];
+    expect(msg.text).toContain("manager.example.com");
+    expect(msg.text).not.toContain(">5<");
+    expect(msg.text).toContain("تعداد کل: 1");
+  });
+
   it("handleDeleteSub removes the subscription", async () => {
     await insertTestSub(db, 777, "Temp Sub", "https://x.com/sub");
 
@@ -293,6 +304,44 @@ describe("/listsub + delete subscription", () => {
 
       expect(api.sendMessageCalls.length).toBe(1);
       expect(api.sendMessageCalls[0].text).toContain("گزینه ناشناخته");
+    });
+
+    it("uses correct Persian wording for the settings message", async () => {
+      await handleAutoFetch(makeCtx(db, api, { message: makeMessage({ text: "/autofetch" }) }));
+
+      const text = api.sendMessageCalls[0].text;
+      expect(text).toContain("بازه زمانی دریافت: 24 ساعت");
+      expect(text).not.toContain("بزمان");
+    });
+
+    it("confirms interval change with correct wording", async () => {
+      await handleAutoFetch(makeCtx(db, api, { message: makeMessage({ text: "/autofetch interval 6" }) }));
+
+      expect(api.sendMessageCalls[0].text).toContain("بازه زمانی دریافت به 6 ساعت تغییر کرد.");
+    });
+
+    it("rejects an out-of-range interval with correct wording", async () => {
+      await handleAutoFetch(makeCtx(db, api, { message: makeMessage({ text: "/autofetch interval 999" }) }));
+
+      const text = api.sendMessageCalls[0].text;
+      expect(text).toContain("بازه زمانی نامعتبر");
+      expect(text).toContain("1 تا 168 ساعت");
+    });
+
+    it("reports when no subscriptions exist on /autofetch on", async () => {
+      await handleAutoFetch(makeCtx(db, api, { message: makeMessage({ text: "/autofetch on" }) }));
+
+      expect(api.sendMessageCalls[0].text).toContain("هیچ اشتراکی ثبت نشده است");
+    });
+
+    it("reports when auto-fetch is already enabled everywhere", async () => {
+      await insertTestSub(db, 888, "Sub A", "https://example.com/a");
+      await handleAutoFetch(makeCtx(db, api, { message: makeMessage({ text: "/autofetch on" }) }));
+
+      const text = api.sendMessageCalls[0].text;
+      expect(text).toContain("از قبل");
+      expect(text).toContain("فعال بود");
+      expect(text).not.toContain("برای 0 اشتراک");
     });
   });
 });

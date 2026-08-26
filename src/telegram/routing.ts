@@ -11,7 +11,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import type { TgMessage, TgChannelPost, TgCallbackQuery } from "./types";
 import { getMessageText, isPrivateChat, isChannelChat } from "./types";
 import type { TelegramBotAPI } from "./api";
-import { executeCommand, handleMenuAction, handleSendAction, handleDeleteSub, type CommandContext } from "./commands";
+import { executeCommand, handleMenuAction, handleSendAction, handleDeleteSub, autofetchToggleText, type CommandContext } from "./commands";
 import { cancelFetch, getActiveFetch } from "../ingest/subscription";
 import { isAdmin } from "./auth";
 import { handleTextUpload, handleDocumentUpload, handleOperatorSelection } from "../ingest/admin";
@@ -255,6 +255,43 @@ export async function processCallbackQuery(
     return;
   }
 
+  // Handle send-to-channel callbacks (send:files|recent|all|cancel)
+  if (data.startsWith("send:")) {
+    if (!callbackQuery.message) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
+    const sendAction = data.slice(5);
+    const ctx = { db, api, adminUserIds, message: callbackQuery.message, userId: callbackQuery.from.id, isCallback: true };
+    try {
+      await handleSendAction(sendAction, ctx);
+    } catch (e) {
+      console.error("[routing] send action failed: action=" + sendAction + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
+    await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+    return;
+  }
+  // Handle subscription delete buttons (del_sub:<chat_id>)
+  if (data.startsWith("del_sub:")) {
+    const subChatId = parseInt(data.slice(8), 10);
+    if (isNaN(subChatId)) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+      return;
+    }
+    if (!callbackQuery.message) {
+      await api.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "پیام قدیمی است — دوباره تلاش کنید" });
+      return;
+    }
+    const ctx = { db, api, adminUserIds, message: callbackQuery.message, userId: callbackQuery.from.id, isCallback: true };
+    try {
+      await handleDeleteSub(subChatId, ctx);
+    } catch (e) {
+      console.error("[routing] del_sub failed: chatId=" + subChatId + " error=" + (e instanceof Error ? e.message : String(e)));
+    }
+    await api.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+    return;
+  }
+
   // Unknown / stale callback data (e.g. buttons from an older deployed
   // version, or old operator selection keys) — tell the user to open a
   // fresh menu instead of staying silent.
@@ -294,16 +331,16 @@ async function handleAutoFetchAction(action: string, ctx: CommandContext): Promi
   if (action === "on") {
     let count = 0;
     for (const sub of subs) { if (!sub.auto_fetch) { await updateSource(db, sub.chat_id, { auto_fetch: 1 }); count++; } }
-    await api.sendMessage({ chat_id: chatId, text: "\u2705 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + count + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u0641\u0639\u0627\u0644 \u0634\u062F.", reply_markup: buildAutoFetchKeyboard() });
+    await api.sendMessage({ chat_id: chatId, text: autofetchToggleText(true, subs.length, count), reply_markup: buildAutoFetchKeyboard() });
   } else if (action === "off") {
     let count = 0;
     for (const sub of subs) { if (sub.auto_fetch) { await updateSource(db, sub.chat_id, { auto_fetch: 0 }); count++; } }
-    await api.sendMessage({ chat_id: chatId, text: "\u274C \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + count + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u0634\u062F.", reply_markup: buildAutoFetchKeyboard() });
+    await api.sendMessage({ chat_id: chatId, text: autofetchToggleText(false, subs.length, count), reply_markup: buildAutoFetchKeyboard() });
   } else if (action.startsWith("interval:")) {
     const hours = parseInt(action.split(":")[1], 10);
     if (isNaN(hours) || hours < 1 || hours > 168) return;
     for (const sub of subs) { await db.prepare("UPDATE sources SET fetch_interval_hours = ? WHERE chat_id = ?").bind(hours, sub.chat_id).run(); }
-    await api.sendMessage({ chat_id: chatId, text: "\u23F1\uFE0F \u0628\u0632\u0645\u0627\u0646 \u062F\u0631\u06CC\u0627\u0641\u062A \u0628\u0647 " + hours + " \u0633\u0627\u0639\u062F \u062A\u063A\u06CC\u06CC\u0631 \u06A9\u0631\u062F.", reply_markup: buildAutoFetchKeyboard() });
+    await api.sendMessage({ chat_id: chatId, text: "\u23F1\uFE0F \u0628\u0627\u0632\u0647 \u0632\u0645\u0627\u0646\u06CC \u062F\u0631\u06CC\u0627\u0641\u062A \u0628\u0647 " + hours + " \u0633\u0627\u0639\u062A \u062A\u063A\u06CC\u06CC\u0631 \u06A9\u0631\u062F.", reply_markup: buildAutoFetchKeyboard() });
   }
 }
 

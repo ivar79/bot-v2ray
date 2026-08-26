@@ -116,7 +116,13 @@ export async function cancelFetch(flowId: string, userId: number, chatId: number
     return true;
   }
   if (!db) return false;
-  return requestFetchCancellation(db, flowId, userId, chatId);
+  // No live fetch in this worker's memory: the run is orphaned (its worker
+  // crashed before finishing) or lives on another isolate. Mark it finished
+  // so it stops blocking new fetches immediately - setting only the cancel
+  // flag would leave the 'running' row in place until staleness cleanup.
+  const changed = await requestFetchCancellation(db, flowId, userId, chatId);
+  if (changed) await finishFetchRun(db, flowId, "cancelled");
+  return changed;
 }
 
 /** Read persistent cancellation state for a fetch flow. */

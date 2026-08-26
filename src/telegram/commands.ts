@@ -67,6 +67,46 @@ export interface CommandContext {
   /** True when invoked from inline keyboard callback (not a /command). */
   isCallback?: boolean;
 }
+/**
+ * Human-readable name for a subscription: prefers a meaningful stored title,
+ * otherwise falls back to the subscription URL hostname.
+ */
+function subDisplayName(sub: { title: string | null; sub_url?: string | null }): string {
+  if (sub.title && /[a-zA-Z\u0600-\u06FF]/.test(sub.title)) return sub.title;
+  if (sub.sub_url) {
+    try {
+      const host = new URL(sub.sub_url).hostname;
+      if (host) return host;
+    } catch {
+      // Invalid URL - fall through to title/sub fallback
+    }
+  }
+  return sub.title || "Sub";
+}
+
+/**
+ * Reply text for /autofetch on|off toggles (command and menu callback).
+ * Explains the result clearly even when nothing needed to change.
+ */
+export function autofetchToggleText(
+  enabling: boolean,
+  totalSubs: number,
+  changed: number
+): string {
+  if (totalSubs === 0) {
+    return enabling
+      ? "\u2705 \u0647\u06CC\u0686 \u0627\u0634\u062A\u0631\u0627\u06A9\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647 \u0627\u0633\u062A."
+      : "\u274C \u0647\u06CC\u0686 \u0627\u0634\u062A\u0631\u0627\u06A9\u06CC \u062B\u0628\u062A \u0646\u0634\u062F\u0647 \u0627\u0633\u062A.";
+  }
+  if (changed === 0) {
+    return enabling
+      ? "\u2705 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0627\u0632 \u0642\u0628\u0644 \u0628\u0631\u0627\u06CC \u0647\u0645\u0647 \u0627\u0634\u062A\u0631\u0627\u06A9\u200C\u0647\u0627 \u0641\u0639\u0627\u0644 \u0628\u0648\u062F."
+      : "\u274C \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0627\u0632 \u0642\u0628\u0644 \u0628\u0631\u0627\u06CC \u0647\u0645\u0647 \u0627\u0634\u062A\u0631\u0627\u06A9\u200C\u0647\u0627 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u0628\u0648\u062F.";
+  }
+  return enabling
+    ? "\u2705 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + changed + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u0641\u0639\u0627\u0644 \u0634\u062F."
+    : "\u274C \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + changed + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u0634\u062F.";
+}
 
 // ─── /start ────────────────────────────────────────────────
 
@@ -1409,7 +1449,7 @@ export async function handleListSub(ctx: CommandContext): Promise<void> {
           : sub.sub_status === "inactive"
             ? "\u274C"
             : "\u23F8\uFE0F";
-      const title = sub.title || sub.sub_url?.substring(0, 30) || "Sub";
+      const title = subDisplayName(sub);
       const autoFetch = sub.auto_fetch ? "\u26A1" : "";
       const lastFetch = sub.last_fetched_at
         ? "\n    \uD83D\uDCC5 " + new Date(sub.last_fetched_at).toLocaleDateString()
@@ -1430,13 +1470,13 @@ export async function handleListSub(ctx: CommandContext): Promise<void> {
       );
     }
 
-    lines.push("\uD83D\uDCCF \u06A9\u0644: " + subs.length);
+    lines.push("\uD83D\uDCCA \u062A\u0639\u062F\u0627\u062F \u06A9\u0644: " + subs.length);
     lines.push("");
     lines.push("\uD83D\uDDD1\uFE0F \u0628\u0631\u0627\u06CC \u062D\u0630\u0641 \u06CC\u06A9 \u0627\u0634\u062A\u0631\u0627\u06A9\u060C \u0631\u0648\u06CC \u062F\u06A9\u0645\u0647 \u0622\u0646 \u0628\u0632\u0646\u06CC\u062F:");
 
     // One delete button per subscription (single-click delete)
     const kbRows: TgInlineKeyboardButton[][] = subs.map((sub) => {
-      const btnTitle = sub.title || sub.sub_url?.substring(0, 25) || "Sub";
+      const btnTitle = subDisplayName(sub);
       return [{ text: "\uD83D\uDDD1\uFE0F " + btnTitle, callback_data: "del_sub:" + sub.chat_id }];
     });
     kbRows.push([{ text: "\u25C0\uFE0F \u0628\u0627\u0632\u06AF\u0634\u062A \u0628\u0647 \u0645\u0646\u0648", callback_data: MENU_CB.BACK }]);
@@ -1609,12 +1649,12 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
         "\u2699\uFE0F <b>\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631</b>",
         "",
         "\u0627\u0634\u062A\u0631\u0627\u06A9\u200C\u0647\u0627 \u0628\u0627 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631: " + activeCount + "/" + subs.length,
-        "\u0628\u0632\u0645\u0627\u0646 \u062F\u0631\u06CC\u0627\u0641\u062A: " + interval + " \u0633\u0627\u0639\u062A",
+        "\u0628\u0627\u0632\u0647 \u0632\u0645\u0627\u0646\u06CC \u062F\u0631\u06CC\u0627\u0641\u062A: " + interval + " \u0633\u0627\u0639\u062A",
         "",
         "\u0627\u0633\u062A\u0641\u0627\u062F\u0647:",
         "/autofetch on — \u0641\u0639\u0627\u0644 \u06A9\u0631\u062F\u0646",
         "/autofetch off — \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u06A9\u0631\u062F\u0646",
-        "/autofetch interval <\u0633\u0627\u0639\u062A> — \u062A\u063A\u06CC\u06CC\u0631 \u0628\u0632\u0645\u0627\u0646",
+        "/autofetch interval <\u0633\u0627\u0639\u062A> — \u062A\u063A\u06CC\u06CC\u0631 \u0628\u0627\u0632\u0647 \u0632\u0645\u0627\u0646\u06CC",
       ].join("\n"),
       parse_mode: "HTML",
       reply_markup: buildAutoFetchKeyboard(),
@@ -1636,7 +1676,7 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
     }
     await api.sendMessage({
       chat_id: chatId,
-      text: "\u2705 \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + count + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u0641\u0639\u0627\u0644 \u0634\u062F.",
+      text: autofetchToggleText(true, subs.length, count),
       reply_markup: buildBackKeyboard(),
     });
     return;
@@ -1654,7 +1694,7 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
     }
     await api.sendMessage({
       chat_id: chatId,
-      text: "\u274C \u062F\u0631\u06CC\u0627\u0641\u062A \u062E\u0648\u062F\u06A9\u0627\u0631 \u0628\u0631\u0627\u06CC " + count + " \u0627\u0634\u062A\u0631\u0627\u06A9 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644 \u0634\u062F.",
+      text: autofetchToggleText(false, subs.length, count),
       reply_markup: buildBackKeyboard(),
     });
     return;
@@ -1665,7 +1705,7 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
     if (isNaN(hours) || hours < 1 || hours > 168) {
       await api.sendMessage({
         chat_id: chatId,
-        text: "\u26A0\uFE0F \u0628\u0632\u0645\u0627\u0646 \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A. \u0645\u0642\u062F\u0645: 1 \u062A\u0627 168 \u0633\u0627\u0639\u062F.",
+        text: "\u26A0\uFE0F \u0628\u0627\u0632\u0647 \u0632\u0645\u0627\u0646\u06CC \u0646\u0627\u0645\u0639\u062A\u0628\u0631 \u0627\u0633\u062A. \u0645\u0642\u062F\u0627\u0631: 1 \u062A\u0627 168 \u0633\u0627\u0639\u062A.",
         reply_markup: buildBackKeyboard(),
       });
       return;
@@ -1680,7 +1720,7 @@ export async function handleAutoFetch(ctx: CommandContext): Promise<void> {
     }
     await api.sendMessage({
       chat_id: chatId,
-      text: "\u2705 \u0628\u0632\u0645\u0627\u0646 \u062F\u0631\u06CC\u0627\u0641\u062A \u0628\u0647 " + hours + " \u0633\u0627\u0639\u062A \u062A\u063A\u06CC\u06CC\u0631 \u06A9\u0631\u062F.",
+      text: "\u2705 \u0628\u0627\u0632\u0647 \u0632\u0645\u0627\u0646\u06CC \u062F\u0631\u06CC\u0627\u0641\u062A \u0628\u0647 " + hours + " \u0633\u0627\u0639\u062A \u062A\u063A\u06CC\u06CC\u0631 \u06A9\u0631\u062F.",
       reply_markup: buildBackKeyboard(),
     });
     return;

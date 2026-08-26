@@ -38,14 +38,25 @@ export async function getFetchRun(
   ).bind(flowId).first<FetchRunRow>();
 }
 
+/**
+ * A fetch run older than this is treated as orphaned (the worker that
+ * owned it crashed or was killed before finishing) and no longer blocks
+ * new fetches. A full fetch cycle takes a few minutes at most, so 15
+ * minutes is a generous safety margin.
+ */
+export const STALE_FETCH_RUN_MINUTES = 15;
+
 export async function getActiveFetchRun(
   db: D1Database,
   userId: number,
   chatId: number
 ): Promise<FetchRunRow | null> {
   return await db.prepare(
-    "SELECT * FROM fetch_runs WHERE user_id = ? AND chat_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1"
-  ).bind(userId, chatId).first<FetchRunRow>();
+    `SELECT * FROM fetch_runs
+     WHERE user_id = ? AND chat_id = ? AND status = 'running'
+       AND datetime(started_at) >= datetime('now', '-' || ? || ' minutes')
+     ORDER BY started_at DESC LIMIT 1`
+  ).bind(userId, chatId, STALE_FETCH_RUN_MINUTES).first<FetchRunRow>();
 }
 
 export async function requestFetchCancellation(
@@ -86,13 +97,13 @@ export async function finishFetchRun(
 
 export async function cleanupStaleFetchRuns(
   db: D1Database,
-  maxAgeMinutes = 30
+  maxAgeMinutes = STALE_FETCH_RUN_MINUTES
 ): Promise<number> {
   const result = await db.prepare(
     `UPDATE fetch_runs
      SET status = 'failed', updated_at = ?, finished_at = ?
      WHERE status = 'running'
-       AND started_at < datetime('now', '-' || ? || ' minutes')`
+       AND datetime(started_at) < datetime('now', '-' || ? || ' minutes')`
   ).bind(nowISO(), nowISO(), maxAgeMinutes).run();
   return result.meta.changes;
 }

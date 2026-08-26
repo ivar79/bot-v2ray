@@ -15,6 +15,7 @@ import {
 } from "../../src/telegram/routing";
 import type { TgMessage, TgChannelPost, TgCallbackQuery } from "../../src/telegram/types";
 import { registerFetch, isFetchActive, unregisterFetch, getFetchAbortSignal } from "../../src/ingest/subscription";
+import { insertSource, updateSource, getSourceByChatId } from "../../src/db/sources";
 import { MENU_CB } from "../../src/telegram/keyboard";
 
 function makeAdminMessage(text: string): TgMessage {
@@ -340,6 +341,72 @@ describe("Telegram Update Routing", () => {
       // Fetch sends 2 messages: loading + result
       expect(api.sendMessageCalls.length).toBe(2);
       expect(api.sendMessageCalls.some(m => m.text.includes("Access denied"))).toBe(false);
+    });
+
+    it("should route del_sub callback to the delete handler", async () => {
+      await insertSource(db, {
+        chat_id: 123456,
+        title: "TestSub",
+        type: "subscription",
+        enabled: 1,
+        trusted: 1,
+      });
+      await updateSource(db, 123456, {
+        sub_url: "https://example.com/sub.txt",
+        sub_status: "active",
+        auto_fetch: 1,
+      });
+
+      await processCallbackQuery({
+        id: "cb-del-sub",
+        from: { id: 111111, is_bot: false, first_name: "Admin" },
+        message: {
+          message_id: 20,
+          chat: { id: 111111, type: "private" },
+          date: Date.now(),
+        },
+        data: "del_sub:123456",
+      }, db, api, adminUserIds);
+
+      expect(api.sendMessageCalls[0].text).toContain("حذف شد");
+      expect(api.sendMessageCalls[0].text).not.toContain("قدیمی");
+      expect(await getSourceByChatId(db, 123456)).toBeNull();
+    });
+
+    it("should route send:cancel callback instead of treating it as stale", async () => {
+      await processCallbackQuery({
+        id: "cb-send-cancel",
+        from: { id: 111111, is_bot: false, first_name: "Admin" },
+        message: {
+          message_id: 21,
+          chat: { id: 111111, type: "private" },
+          date: Date.now(),
+        },
+        data: "send:cancel",
+      }, db, api, adminUserIds);
+
+      expect(api.sendMessageCalls[0].text).toContain("لغو شد");
+      expect(api.sendMessageCalls[0].text).not.toContain("قدیمی");
+    });
+
+    it("should allow a new fetch when the previous run is stale", async () => {
+      await db.prepare(
+        "INSERT INTO fetch_runs (flow_id, user_id, chat_id, status, started_at, updated_at) VALUES (?, ?, ?, 'running', datetime('now', '-40 minutes'), datetime('now'))"
+      ).bind("stale-flow", 222222, 222222).run();
+
+      await processCallbackQuery({
+        id: "cb-fetch-after-stale",
+        from: { id: 222222, is_bot: false, first_name: "Admin2" },
+        message: {
+          message_id: 22,
+          chat: { id: 222222, type: "private" },
+          date: Date.now(),
+        },
+        data: "menu:fetch",
+      }, db, api, adminUserIds);
+
+      // The stale run must not block a fresh fetch
+      expect(api.sendMessageCalls.some(m => m.text.includes("در حال اجراست"))).toBe(false);
     });
   });
 });

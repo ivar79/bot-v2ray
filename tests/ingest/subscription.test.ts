@@ -15,7 +15,6 @@ import {
   registerFetch,
   cancelFetch,
   getFetchCancellation,
-  isFetchCancelled,
   unregisterFetch,
   type SubFormat,
 } from "../../src/ingest/subscription";
@@ -166,7 +165,9 @@ describe("Subscription Fetcher", () => {
       // Simulate the callback request: the original request's isolate-local Map is gone.
       await unregisterFetch(flowId);
       await cancelFetch(flowId, 7002, 7002, db);
-      expect(await isFetchCancelled(flowId, db)).toBe(true);
+      // The orphaned run is finished as 'cancelled' so it stops blocking new
+      // fetches immediately and the cancellation is observable from any context.
+      expect((await getFetchRun(db, flowId))?.status).toBe("cancelled");
 
       await unregisterFetch(flowId, db, 7002, "cancelled");
       expect((await getFetchRun(db, flowId))?.status).toBe("cancelled");
